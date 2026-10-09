@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Notely</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; connect-src 'self'; media-src 'self' blob:;">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap">
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+    body {
+      display: flex;
+      min-width: 0;
+      background: #F7F4FB;
+      color: #2E2A3B;
+      font-family: 'DM Sans', 'Segoe UI', sans-serif;
+    }
+    button, textarea, input { font-family: inherit; }
+    button {
+      cursor: pointer;
+      border: 0;
+      border-radius: 14px;
+      min-height: 44px;
+      padding: 0 18px;
+      font-weight: 600;
+      font-size: 15px;
+      color: inherit;
+    }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible {
+      outline: 3px solid #5B4BC7;
+      outline-offset: 2px;
+    }
+    aside {
+      flex: 0 0 280px;
+      width: 280px;
+      min-width: 0;
+      min-height: 0;
+      background: #EFEAFB;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow: auto;
+    }
+    aside > * { flex-shrink: 0; }
+    h1, h2 { font-family: 'Bricolage Grotesque', 'Segoe UI', sans-serif; margin: 0; }
+    .brand { font-size: 28px; }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 14px;
+      text-align: left;
+      width: 100%;
+      font-weight: 500;
+      border: 2px solid transparent;
+      overflow-wrap: anywhere;
+    }
+    .card.current { border-color: #5B4BC7; }
+    .card small { display: block; color: #5F5978; margin-top: 4px; font-weight: 400; overflow-wrap: anywhere; }
+    .card.warn { border-color: #C9546B; }
+    .card .err-text { color: #8A2940; }
+    .notes { display: flex; flex-direction: column; gap: 10px; }
+    .note-row { position: relative; }
+    .note-row .card { padding-right: 44px; }
+    .star-btn {
+      min-height: 32px;
+      width: 32px;
+      padding: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: #8F86AD;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .star-btn:hover { background: #EFEAFB; }
+    .star-btn.on { color: #D99A00; }
+    .note-row .star-btn { position: absolute; top: 8px; right: 6px; }
+    .head-star { flex: 0 0 auto; width: 40px; min-height: 40px; font-size: 22px; }
+    input.search {
+      width: 100%;
+      min-width: 0;
+      height: 38px;
+      border: 0;
+      border-radius: 12px;
+      padding: 0 12px;
+      background: #fff;
+      color: #2E2A3B;
+      font-size: 14px;
+    }
+    .filter { display: flex; gap: 6px; }
+    .filter button {
+      flex: 1 1 0;
+      min-height: 32px;
+      padding: 0 10px;
+      border-radius: 10px;
+      font-size: 13px;
+      background: transparent;
+      color: #5F5978;
+    }
+    .filter button.on { background: #fff; color: #2E2A3B; }
+    .grow { flex: 1; }
+    .muted { color: #5F5978; font-size: 13px; line-height: 1.45; margin: 0; }
+    .path { overflow-wrap: anywhere; word-break: break-word; }
+    main {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      padding: 24px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+    .head { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+    .head-meta { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding-top: 4px; }
+    textarea.t {
+      flex: 1 1 auto;
+      font: 700 30px/1.2 'Bricolage Grotesque', 'Segoe UI', sans-serif;
+      border: 0;
+      background: transparent;
+      color: #2E2A3B;
+      outline: none;
+      width: 100%;
+      min-width: 0;
+      padding: 2px 0;
+      border-bottom: 2px dashed transparent;
+      resize: none;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      height: auto;
+    }
+    textarea.t:hover { border-bottom-color: #CFC6F3; }
+    textarea.t:focus { border-bottom: 2px solid #5B4BC7; }
+    @media (max-width: 1050px) {
+      .head { flex-wrap: wrap; }
+      textarea.t { flex-basis: 100%; }
+    }
+    .badge {
+      flex: 0 0 auto;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      background: #E4DDFB;
+      white-space: nowrap;
+    }
+    .badge.unsaved { background: #FFE3B3; }
+    .badge.saved { background: #D9F2E6; }
+    .badge.error { background: #F9C0C0; color: #8A2940; }
+    .steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+    .steps li {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #5F5978;
+      background: #EFEAFB;
+    }
+    .steps li.done { background: #D9F2E6; color: #1F6B4A; }
+    .steps li.active { background: #5B4BC7; color: #fff; }
+    .steps li.failed { background: #F9C0C0; color: #8A2940; }
+    .row {
+      display: flex;
+      gap: 16px;
+      min-width: 0;
+      min-height: 240px;
+      flex: 1 1 auto;
+    }
+    .row > * {
+      flex: 1 1 0;
+      min-width: 0;
+      min-height: 0;
+    }
+    .preview, .pts {
+      border-radius: 20px;
+      overflow: auto;
+      min-height: 220px;
+    }
+    .preview {
+      background: #D8EAFB;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+    }
+    .preview img {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 38vh;
+      object-fit: contain;
+      border-radius: 12px;
+    }
+    .preview .placeholder { padding: 16px; text-align: center; }
+    .shot-btn {
+      position: relative;
+      display: block;
+      width: 100%;
+      min-height: 0;
+      padding: 0;
+      border-radius: 12px;
+      background: transparent;
+      cursor: zoom-in;
+    }
+    .shot-btn img { transition: filter 0.15s ease; }
+    .shot-btn:hover img, .shot-btn:focus-visible img { filter: brightness(0.92); }
+    .zoom-hint {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(46, 42, 59, 0.75);
+      color: #fff;
+      font-size: 12px;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+      pointer-events: none;
+    }
+    .shot-btn:hover .zoom-hint, .shot-btn:focus-visible .zoom-hint { opacity: 1; }
+    .viewer {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      background: rgba(46, 42, 59, 0.82);
+      opacity: 0;
+      transition: opacity 0.15s ease;
+    }
+    .viewer[hidden] { display: none; }
+    .viewer.open { opacity: 1; }
+    .viewer-bar {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px;
+    }
+    .viewer-bar button {
+      min-width: 40px;
+      min-height: 40px;
+      padding: 0 10px;
+      border-radius: 12px;
+      background: #fff;
+      color: #2E2A3B;
+      font-size: 18px;
+    }
+    .viewer-bar button.wide { font-size: 14px; }
+    .viewer-bar button:hover { background: #EFEAFB; }
+    .viewer-bar #vClose { margin-left: 12px; }
+    .viewer-zoom { min-width: 56px; text-align: center; color: #fff; font-size: 14px; font-weight: 600; }
+    .viewer-stage {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+      cursor: zoom-out;
+      touch-action: none;
+    }
+    .viewer-stage img {
+      position: absolute;
+      left: 0;
+      top: 0;
+      max-width: none;
+      transform-origin: 0 0;
+      border-radius: 6px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+      cursor: default;
+      user-select: none;
+    }
+    .viewer-stage.pannable img { cursor: grab; }
+    .viewer-stage.dragging img { cursor: grabbing; }
+    .viewer-error {
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      height: fit-content;
+      text-align: center;
+      color: #fff;
+      font-size: 15px;
+    }
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: rgba(46, 42, 59, 0.45);
+    }
+    .modal[hidden] { display: none; }
+    .modal-card {
+      width: min(560px, 100%);
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+      overflow-x: hidden;
+      background: #F7F4FB;
+      border-radius: 20px;
+      padding: 22px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 20px 50px rgba(46, 42, 59, 0.25);
+    }
+    .modal-card h2 { font-size: 22px; }
+    .choices { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .choices legend { font-size: 13px; font-weight: 600; color: #5F5978; margin-bottom: 4px; }
+    .choice { display: flex; gap: 10px; align-items: flex-start; background: #fff; border-radius: 14px; padding: 10px 12px; cursor: pointer; border: 2px solid transparent; }
+    .choice:has(input:checked) { border-color: #5B4BC7; }
+    .choice input { margin-top: 4px; }
+    .choice span { display: flex; flex-direction: column; gap: 2px; font-size: 14px; min-width: 0; }
+    .choice small { color: #5F5978; font-size: 12px; line-height: 1.4; }
+    .gemini-box { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .gemini-box[hidden] { display: none; }
+    .consent { background: #FFF1C9; border-radius: 14px; padding: 10px 12px; font-size: 13px; line-height: 1.45; }
+    .consent p { margin: 0 0 8px; }
+    .check { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; cursor: pointer; }
+    .check input { margin-top: 3px; }
+    .row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+    .row-btns.end { justify-content: flex-end; }
+    .row-btns button { min-height: 40px; font-size: 14px; }
+    #settingsMsg { min-height: 20px; overflow-wrap: anywhere; }
+    #settingsMsg.err { color: #8A2940; }
+    #settingsMsg.ok { color: #1F6B4A; }
+    @media (prefers-reduced-motion: reduce) {
+      .viewer, .shot-btn img, .zoom-hint { transition: none; }
+    }
+    .pts {
+      background: #FFF1C9;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .pts h2 { font-size: 20px; }
+    .pts textarea {
+      flex: 1 1 auto;
+      min-height: 140px;
+      width: 100%;
+      resize: none;
+      border: 0;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.55);
+      padding: 10px 12px;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #2E2A3B;
+    }
+    .field-label { font-size: 13px; font-weight: 600; color: #5F5978; }
+    textarea.raw {
+      width: 100%;
+      min-height: 110px;
+      max-height: 260px;
+      resize: vertical;
+      background: #fff;
+      border: 0;
+      border-radius: 14px;
+      padding: 12px 14px;
+      color: #2E2A3B;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .more-btn {
+      width: 40px;
+      min-height: 40px;
+      padding: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: #5F5978;
+      font-size: 22px;
+      line-height: 1;
+    }
+    .more-btn:hover { background: #EFEAFB; }
+    .more-btn[aria-expanded="true"] { background: #E4DDFB; color: #2E2A3B; }
+    .menu {
+      position: fixed;
+      z-index: 10;
+      min-width: 220px;
+      max-width: calc(100vw - 16px);
+      padding: 6px;
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(46, 42, 59, 0.18);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .menu[hidden] { display: none; }
+    .menu-item {
+      width: 100%;
+      min-height: 40px;
+      padding: 0 12px;
+      border-radius: 10px;
+      background: transparent;
+      text-align: left;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+    .menu-item:hover:not(:disabled), .menu-item:focus-visible { background: #EFEAFB; }
+    .menu-item:focus-visible { outline-offset: -3px; }
+    .menu-item.danger { background: transparent; color: #8A2940; }
+    .menu-item.danger:hover:not(:disabled), .menu-item.danger:focus-visible { background: #F6DDE2; }
+    .menu-sep { height: 1px; margin: 4px 6px; background: #EFEAFB; }
+    .p { background: #5B4BC7; color: #fff; }
+    .g { background: #D9F2E6; }
+    .g.live { background: #F9C0C0; }
+    .l { background: #E4DDFB; }
+    .danger { background: #F6DDE2; color: #8A2940; }
+    #msg { min-height: 20px; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    #msg.err { color: #8A2940; }
+    #msg.ok { color: #1F6B4A; }
+    .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1 class="brand">Notely</h1>
+    <button class="l" type="button" id="newNote">New note</button>
+    <label class="sr" for="search">Search notes</label>
+    <input class="search" id="search" type="search" placeholder="Search notes" autocomplete="off">
+    <div class="filter" role="group" aria-label="Show">
+      <button type="button" id="showAll" class="on" aria-pressed="true">All</button>
+      <button type="button" id="showStarred" aria-pressed="false">★ Starred</button>
+    </div>
+    <div id="list" class="notes" aria-label="Saved notes"></div>
+    <p id="listEmpty" class="muted">No saved notes yet. Capture a screen or speak, review the draft, then save.</p>
+    <div class="grow"></div>
+    <div class="card" id="folderCard">
+      Stored inside Notely
+      <small id="storeInfo">Use Export note to save a copy to your device.</small>
+      <small id="dirError" class="err-text" hidden></small>
+    </div>
+    <button class="l" type="button" id="openSettings" aria-haspopup="dialog">Settings</button>
+  </aside>
+  <main>
+    <div class="head">
+      <label class="sr" for="title">Note title</label>
+      <textarea class="t" id="title" rows="1" maxlength="200" placeholder="Capture something to begin" title="Click to edit the title"></textarea>
+      <div class="head-meta">
+        <button type="button" class="star-btn head-star" id="starNote" hidden aria-pressed="false" title="Star this note">☆</button>
+        <span class="badge" id="draftState" role="status">New note</span>
+        <button type="button" class="more-btn" id="more" aria-label="More actions" title="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu">⋮</button>
+        <div class="menu" id="moreMenu" role="menu" aria-label="Note actions" hidden>
+          <button type="button" class="menu-item" role="menuitem" id="refresh">Regenerate key points</button>
+          <button type="button" class="menu-item" role="menuitem" id="export" hidden title="Save a copy of this note as a file on your device">Export note</button>
+          <div class="menu-sep" id="menuSep" role="separator" hidden></div>
+          <button type="button" class="menu-item danger" role="menuitem" id="remove" hidden>Delete note</button>
+        </div>
+      </div>
+    </div>
+    <ol class="steps" id="steps" aria-label="Progress">
+      <li data-step="capture">1. Capture</li>
+      <li data-step="ocr">2. Read text</li>
+      <li data-step="clean">3. Clean &amp; summarize</li>
+      <li data-step="review">4. Review &amp; edit</li>
+      <li data-step="saved">5. Save</li>
+    </ol>
+    <div class="row">
+      <div class="preview" id="preview">
+        <p class="placeholder muted" id="shotEmpty">Captured screen will appear here.</p>
+        <button type="button" class="shot-btn" id="zoomShot" hidden aria-label="Enlarge screenshot" title="Click to enlarge">
+          <img id="shot" alt="Captured screenshot">
+          <span class="zoom-hint" aria-hidden="true">⌕ Enlarge</span>
+        </button>
+      </div>
+      <section class="pts" aria-labelledby="ptsHeading">
+        <h2 id="ptsHeading">Key points</h2>
+        <p id="ptsNote" class="muted">Capture a screen or speak to generate key points. You can also type them, one per line.</p>
+        <label class="sr" for="points">Key points, one per line</label>
+        <textarea id="points" placeholder="One key point per line"></textarea>
+      </section>
+    </div>
+    <label class="field-label" for="raw">Notes &amp; details</label>
+    <textarea class="raw" id="raw" placeholder="Definitions, steps, code and links found on screen appear here. What you say is added here too. You can edit everything."></textarea>
+    <div class="actions">
+      <button class="p" type="button" id="capture" title="Capture screen (Ctrl + Shift + S)">Capture screen</button>
+      <button class="g" type="button" id="mic">Start speaking</button>
+      <button class="p" type="button" id="save">Save note</button>
+    </div>
+    <p id="msg" class="muted" role="status" aria-live="polite"></p>
+    <div class="modal" id="settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
+      <form class="modal-card" id="settingsForm" novalidate>
+        <h2 id="settingsTitle">Settings</h2>
+        <fieldset class="choices">
+          <legend>How Notely writes notes from a capture</legend>
+          <label class="choice"><input type="radio" name="provider" value="rules"> <span><b>Rules only</b><small>Offline. No AI is used.</small></span></label>
+          <label class="choice"><input type="radio" name="provider" value="ollama"> <span><b>Local AI (Ollama)</b><small>Runs on this computer when Ollama is installed; otherwise rules. Nothing leaves your computer.</small></span></label>
+          <label class="choice"><input type="radio" name="provider" value="gemini"> <span><b>Google Gemini (cloud)</b><small>Understands the screenshot itself. Sends it to Google.</small></span></label>
+        </fieldset>
+        <div class="gemini-box" id="geminiBox" hidden>
+          <label class="field-label" for="geminiKey">Gemini API key</label>
+          <input class="search" id="geminiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key from Google AI Studio" aria-describedby="keyState">
+          <p class="muted" id="keyState"></p>
+          <label class="field-label" for="geminiModel">Model</label>
+          <input class="search" id="geminiModel" type="text" autocomplete="off" spellcheck="false">
+          <div class="consent">
+            <p>When you capture a screen or regenerate key points, Notely sends <b>the screenshot</b> and <b>the text read from it</b> (and what you said, if you used Start speaking) to Google's Gemini API for processing. Google's terms and privacy policy apply. A screenshot shows everything on your screen at that moment, which can include private or sensitive information such as messages, emails, account details or passwords, so check your screen before capturing. No screenshot or text is sent until you agree, and you can turn this off at any time by choosing Rules only or Local AI.</p>
+            <label class="check"><input type="checkbox" id="consent"> I agree to send screenshots and their text to Google Gemini.</label>
+          </div>
+          <div class="row-btns">
+            <button type="button" class="l" id="testConn">Test connection</button>
+            <button type="button" class="l" id="removeKey" hidden>Remove saved key</button>
+          </div>
+        </div>
+        <p id="settingsMsg" class="muted" role="status" aria-live="polite"></p>
+        <div class="row-btns end">
+          <button type="button" class="l" id="settingsCancel">Cancel</button>
+          <button type="submit" class="p" id="settingsSave">Save</button>
+        </div>
+      </form>
+    </div>
+    <div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-label="Screenshot viewer" hidden>
+      <div class="viewer-bar" role="toolbar" aria-label="Zoom controls">
+        <button type="button" id="vZoomOut" aria-label="Zoom out" title="Zoom out (−)">−</button>
+        <span class="viewer-zoom" id="vZoom" aria-live="polite">100%</span>
+        <button type="button" id="vZoomIn" aria-label="Zoom in" title="Zoom in (+)">+</button>
+        <button type="button" id="vFit" class="wide" aria-label="Fit to window" title="Fit to window (F)">Fit</button>
+        <button type="button" id="vReset" class="wide" aria-label="Reset zoom to actual size" title="Reset zoom to actual size (0)">100%</button>
+        <button type="button" id="vClose" aria-label="Close viewer" title="Close (Esc)">✕</button>
+      </div>
+      <div class="viewer-stage" id="viewerStage">
+        <img id="viewerImg" alt="Screenshot, enlarged" draggable="false">
+        <p class="viewer-error" id="viewerError" hidden>This screenshot could not be displayed.</p>
+      </div>
+    </div>
+    <p id="modelHint" class="muted" hidden>The first transcription downloads a free speech model (~150 MB) and needs internet. Later runs work offline.</p>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>

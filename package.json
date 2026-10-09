@@ -1,0 +1,19 @@
+{
+  "name": "notely",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/logic.test.js test/pipeline.test.js test/storage.test.js test/export.test.js test/notes-ai.test.js test/capture-flow.test.js test/gemini.test.js",
+    "test:ocr": "node test/ocr-pipeline-smoke.js",
+    "test:e2e": "node test/ui-e2e.js"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.0.0",
+    "electron": "^31.7.7",
+    "tesseract.js": "^5.1.0"
+  },
+  "allowScripts": {
+    "electron@31.7.7": true
+  }
+}

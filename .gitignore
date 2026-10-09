@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+
+# Secrets and environment files (keep a non-secret .env.example if one is added)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+secrets*.json
+
+# Notely user data. The app keeps these in %APPDATA%\notely, never in the project,
+# but ignore them in case a profile is copied or pointed here by mistake.
+gemini-key.bin
+Local State
+/settings.json
+/cfg.json
+/imported.json
+/notes/
+/models/
+/screenshots/
+screenshot*.png
+
+# Build and distribution output
+dist/
+out/
+build/
+release/
+*.asar
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+*.blockmap
+
+# Logs, coverage and temporary files
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/
+.nyc_output/
+*.tmp
+*.temp
+tmp/
+temp/
+.cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~

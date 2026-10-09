@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Notely</title>
+  <style>
+    html, body { margin: 0; overflow: hidden; background: transparent; }
+    button {
+      width: 56px;
+      height: 56px;
+      margin: 4px;
+      border: 0;
+      border-radius: 50%;
+      background: #5B4BC7;
+      color: #fff;
+      font: 700 20px "Segoe UI", sans-serif;
+      cursor: pointer;
+      box-shadow: 0 8px 20px rgba(46, 42, 59, 0.28);
+    }
+    button:hover { filter: brightness(1.06); }
+    button:focus-visible { outline: 3px solid #FFF1C9; outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <button id="open" type="button" title="Open Notely" aria-label="Open Notely">N</button>
+  <script>
+    document.getElementById('open').addEventListener('click', () => {
+      if (window.n && typeof n.open === 'function') n.open();
+    });
+  </script>
+</body>
+</html>
