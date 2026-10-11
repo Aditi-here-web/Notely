@@ -1,13 +1,15 @@
 'use strict';
 
 const {
-  app, BrowserWindow, globalShortcut, desktopCapturer, ipcMain, screen, dialog, safeStorage,
+  app, BrowserWindow, globalShortcut, desktopCapturer, ipcMain, screen, dialog, safeStorage, clipboard,
 } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { tessCreateWorkerOptions, pngFromDataUrl } = require('./logic');
 const storage = require('./storage');
-const { safeFileName, renderExportHtml } = require('./export');
+const {
+  safeFileName, renderExportHtml, renderExportMarkdown, renderExportText, pngBuffer,
+} = require('./export');
 const {
   createOllamaProvider, summarizeCapture, summarizeTextWith, localAiStatus,
 } = require('./summarizer');
@@ -109,25 +111,101 @@ function importOldNotes() {
 
 // --- Export -----------------------------------------------------------------
 
-function uniqueExportPath(dir, base) {
+function uniqueExportPath(dir, base, ext) {
+  const suffix = String(ext || 'html').replace(/^\./, '');
   for (let i = 1; i < 1000; i++) {
-    const candidate = path.join(dir, `${base}${i === 1 ? '' : ` (${i})`}.html`);
+    const candidate = path.join(dir, `${base}${i === 1 ? '' : ` (${i})`}.${suffix}`);
     if (!fs.existsSync(candidate)) return candidate;
   }
-  return path.join(dir, `${base}.html`);
+  return path.join(dir, `${base}.${suffix}`);
 }
 
-async function exportNote(id) {
-  const note = storage.loadNote(activeRoot(), id);
+const SHARE_FORMATS = {
+  html: { ext: 'html', label: 'Export web page', filter: { name: 'Web page (opens in any browser)', extensions: ['html'] } },
+  markdown: { ext: 'md', label: 'Export Markdown', filter: { name: 'Markdown', extensions: ['md'] } },
+  pdf: { ext: 'pdf', label: 'Export PDF', filter: { name: 'PDF', extensions: ['pdf'] } },
+  png: { ext: 'png', label: 'Save screenshot', filter: { name: 'Screenshot image', extensions: ['png'] } },
+};
+
+const PDF_MS = 30000;
+const PDF_URL_MAX = 8 * 1024 * 1024;
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new storage.StorageError(message, 'ETIMEOUT')), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function htmlToPdf(html) {
+  let w;
+  try {
+    const encoded = encodeURIComponent(html);
+    if (encoded.length > PDF_URL_MAX) {
+      throw new storage.StorageError('This note is too large to export as a PDF. Try without the screenshot, or export as a web page.', 'ETOOLONG');
+    }
+    w = new BrowserWindow({
+      show: false,
+      width: 800,
+      height: 1100,
+      webPreferences: {
+        sandbox: true, contextIsolation: true, nodeIntegration: false,
+      },
+    });
+    await withTimeout(
+      w.loadURL(`data:text/html;charset=utf-8,${encoded}`),
+      PDF_MS,
+      'Creating the PDF took too long.',
+    );
+    return await withTimeout(
+      w.webContents.printToPDF({ printBackground: true, pageSize: 'A4' }),
+      PDF_MS,
+      'Creating the PDF took too long.',
+    );
+  } finally {
+    if (w && !w.isDestroyed()) w.destroy();
+  }
+}
+
+function copyText(data) {
+  const text = typeof data === 'string' ? data : renderExportText(data && typeof data === 'object' ? data : {});
+  if (!text.trim()) throw new storage.StorageError('Nothing to copy.', 'EEMPTY');
+  if (text.length > 500000) throw new storage.StorageError('That note is too long to copy at once.', 'ETOOLONG');
+  clipboard.writeText(text);
+  return { copied: true, bytes: Buffer.byteLength(text) };
+}
+
+async function shareNote(data = {}) {
+  const format = SHARE_FORMATS[data.format] ? data.format : 'html';
+  const includeShot = data.includeShot === true;
+  const spec = SHARE_FORMATS[format];
+  const note = storage.loadNote(activeRoot(), noteId(data.id));
+  if (format === 'png') {
+    const png = pngBuffer(note.shot);
+    if (!png) throw new storage.StorageError('This note has no screenshot to save.', 'ENOSHOT');
+    return writeShareFile(note, spec, png);
+  }
+  const body = format === 'markdown'
+    ? renderExportMarkdown(note, { includeShot })
+    : renderExportHtml(note, { includeShot });
+  if (format === 'pdf') return writeShareFile(note, spec, await htmlToPdf(body));
+  return writeShareFile(note, spec, body);
+}
+
+async function writeShareFile(note, spec, contents) {
   const result = await dialog.showSaveDialog(win, {
-    title: 'Export note',
-    buttonLabel: 'Export',
-    defaultPath: uniqueExportPath(app.getPath('documents'), safeFileName(note.title)),
-    filters: [{ name: 'Web page (opens in any browser)', extensions: ['html'] }],
+    title: spec.label,
+    buttonLabel: 'Save',
+    defaultPath: uniqueExportPath(app.getPath('documents'), safeFileName(note.title), spec.ext),
+    filters: [spec.filter],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   let target = path.resolve(result.filePath);
-  if (!/\.html?$/i.test(target)) target += '.html';
+  const extRe = new RegExp(`\\.${spec.ext}$`, 'i');
+  if (!extRe.test(target)) target += `.${spec.ext}`;
   if (fs.existsSync(target)) {
     const { response } = await dialog.showMessageBox(win, {
       type: 'warning',
@@ -135,18 +213,18 @@ async function exportNote(id) {
       defaultId: 1,
       cancelId: 1,
       message: `${path.basename(target)} already exists.`,
-      detail: 'Replace it with this note?',
+      detail: 'Replace it with this export?',
     });
     if (response !== 0) return { canceled: true };
   }
-  const html = renderExportHtml(note);
   try {
-    storage.writeFileAtomic(target, html);
-    if (fs.statSync(target).size !== Buffer.byteLength(html)) throw new Error('The exported file is incomplete.');
+    storage.writeFileAtomic(target, contents);
+    const expected = Buffer.isBuffer(contents) ? contents.length : Buffer.byteLength(contents);
+    if (fs.statSync(target).size !== expected) throw new Error('The exported file is incomplete.');
   } catch (err) {
     throw new storage.StorageError(`Export failed: ${storage.friendlyFsError(err, path.dirname(target))}`, err.code || 'EEXPORT');
   }
-  return { canceled: false, path: target };
+  return { canceled: false, path: target, format: spec.ext };
 }
 
 // --- Speech model cache -----------------------------------------------------
@@ -428,7 +506,8 @@ function registerIpc() {
   handle('note', (id) => storage.loadNote(activeRoot(), noteId(id)));
   handle('delete', (id) => storage.deleteNote(activeRoot(), noteId(id)));
   handle('star', (data) => storage.setStarred(activeRoot(), noteId(data && data.id), data && data.starred));
-  handle('export', (id) => exportNote(noteId(id)));
+  handle('export', (data) => shareNote(data && typeof data === 'object' ? data : { id: data }));
+  handle('copy-text', (data) => copyText(data));
   handle('caps', async () => ({
     ai: await localAiStatus(settings().load().provider, ai),
     settings: settings().getPublic(),

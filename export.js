@@ -83,9 +83,54 @@ function paragraphs(text) {
   return out.join('\n');
 }
 
-// `note.shot` must be a PNG data URL or null.
-function renderExportHtml(note) {
-  const shot = typeof note.shot === 'string' && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(note.shot) ? note.shot : null;
+function pngDataUrl(shot) {
+  return typeof shot === 'string' && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(shot) ? shot : '';
+}
+
+function pngBuffer(shot) {
+  const url = pngDataUrl(shot);
+  return url ? Buffer.from(url.slice(url.indexOf(',') + 1), 'base64') : null;
+}
+
+function escapeMarkdown(s) {
+  return String(s == null ? '' : s).replace(/([\\`*_[\]#])/g, '\\$1');
+}
+
+// Plain text for the clipboard. Never includes the screenshot.
+function renderExportText(note) {
+  const title = String(note && note.title ? note.title : '').trim() || 'Untitled note';
+  const points = (note && note.points) || [];
+  const raw = String(note && note.raw ? note.raw : '').trim();
+  const spoken = String(note && note.transcript ? note.transcript : '').trim();
+  const lines = [title];
+  if (points.length) {
+    lines.push('', 'Key points');
+    for (const p of points) lines.push(`- ${p}`);
+  }
+  if (raw) lines.push('', 'Notes', raw);
+  if (spoken) lines.push('', 'What you said', spoken);
+  return `${lines.join('\n')}\n`;
+}
+
+function renderExportMarkdown(note, { includeShot = false } = {}) {
+  const title = String(note && note.title ? note.title : '').trim() || 'Untitled note';
+  const points = (note && note.points) || [];
+  const raw = String(note && note.raw ? note.raw : '').trim();
+  const spoken = String(note && note.transcript ? note.transcript : '').trim();
+  const shot = includeShot ? pngDataUrl(note && note.shot) : '';
+  const parts = [`# ${escapeMarkdown(title)}`];
+  if (points.length) {
+    parts.push('', '## Key points', '', ...points.map((p) => `- ${escapeMarkdown(p)}`));
+  }
+  if (raw) parts.push('', '## Notes', '', raw);
+  if (spoken) parts.push('', '## What you said', '', spoken);
+  if (shot) parts.push('', '## Screenshot', '', `![Captured screen](${shot})`);
+  return `${parts.join('\n')}\n`;
+}
+
+// `note.shot` must be a PNG data URL or null. The screenshot is included only when asked.
+function renderExportHtml(note, { includeShot = false } = {}) {
+  const shot = includeShot ? pngDataUrl(note && note.shot) : '';
   const meta = [`Created ${escapeHtml(formatWhen(note.createdAt))}`];
   if (note.updatedAt && note.updatedAt !== note.createdAt) meta.push(`Updated ${escapeHtml(formatWhen(note.updatedAt))}`);
   if (note.capturedAt) meta.push(`Screen captured ${escapeHtml(formatWhen(note.capturedAt))}`);
@@ -134,4 +179,7 @@ ${image}
 `;
 }
 
-module.exports = { escapeHtml, safeFileName, renderExportHtml };
+module.exports = {
+  escapeHtml, escapeMarkdown, safeFileName, pngDataUrl, pngBuffer,
+  renderExportText, renderExportMarkdown, renderExportHtml,
+};

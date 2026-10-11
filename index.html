@@ -142,6 +142,10 @@
       .head { flex-wrap: wrap; }
       textarea.t { flex-basis: 100%; }
     }
+    @media (max-height: 700px) {
+      .row { min-height: 160px; height: min(240px, 38vh); max-height: 42vh; }
+      textarea.raw { min-height: 96px; height: clamp(110px, 20vh, 160px); max-height: min(200px, 32vh); }
+    }
     .badge {
       flex: 0 0 auto;
       padding: 6px 12px;
@@ -170,8 +174,10 @@
       display: flex;
       gap: 16px;
       min-width: 0;
-      min-height: 240px;
-      flex: 1 1 auto;
+      min-height: 200px;
+      flex: 1 1 220px;
+      height: clamp(220px, 36vh, 400px);
+      max-height: min(440px, 48vh);
     }
     .row > * {
       flex: 1 1 0;
@@ -180,29 +186,34 @@
     }
     .preview, .pts {
       border-radius: 20px;
-      overflow: auto;
-      min-height: 220px;
+      overflow: hidden;
+      min-height: 0;
     }
     .preview {
       background: #D8EAFB;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 12px;
+      padding: 10px;
     }
     .preview img {
       display: block;
-      width: 100%;
+      width: auto;
       height: auto;
-      max-height: 38vh;
+      max-width: 100%;
+      max-height: 100%;
       object-fit: contain;
+      object-position: center;
       border-radius: 12px;
     }
     .preview .placeholder { padding: 16px; text-align: center; }
     .shot-btn {
       position: relative;
-      display: block;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       width: 100%;
+      height: 100%;
       min-height: 0;
       padding: 0;
       border-radius: 12px;
@@ -329,9 +340,9 @@
     .row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
     .row-btns.end { justify-content: flex-end; }
     .row-btns button { min-height: 40px; font-size: 14px; }
-    #settingsMsg { min-height: 20px; overflow-wrap: anywhere; }
-    #settingsMsg.err { color: #8A2940; }
-    #settingsMsg.ok { color: #1F6B4A; }
+    #settingsMsg, #shareMsg { min-height: 20px; overflow-wrap: anywhere; }
+    #settingsMsg.err, #shareMsg.err { color: #8A2940; }
+    #settingsMsg.ok, #shareMsg.ok { color: #1F6B4A; }
     @media (prefers-reduced-motion: reduce) {
       .viewer, .shot-btn img, .zoom-hint { transition: none; }
     }
@@ -342,33 +353,50 @@
       flex-direction: column;
       gap: 8px;
     }
+    .pts h2, .pts .muted, .pts .field-label { flex: 0 0 auto; }
     .pts h2 { font-size: 20px; }
     .pts textarea {
       flex: 1 1 auto;
-      min-height: 140px;
+      min-width: 0;
+      min-height: 0;
       width: 100%;
       resize: none;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
       border: 0;
       border-radius: 12px;
       background: rgba(255, 255, 255, 0.55);
       padding: 10px 12px;
-      font-size: 14px;
-      line-height: 1.6;
+      font-size: 15px;
+      line-height: 1.55;
       color: #2E2A3B;
     }
-    .field-label { font-size: 13px; font-weight: 600; color: #5F5978; }
+    .head, .steps, .notes-block, .actions, #msg { flex-shrink: 0; }
+    .notes-block {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
+    .field-label { font-size: 13px; font-weight: 600; color: #5F5978; margin: 0; }
     textarea.raw {
       width: 100%;
-      min-height: 110px;
-      max-height: 260px;
+      min-width: 0;
+      min-height: 120px;
+      height: clamp(140px, 22vh, 220px);
+      max-height: min(280px, 38vh);
       resize: vertical;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
       background: #fff;
       border: 0;
       border-radius: 14px;
       padding: 12px 14px;
       color: #2E2A3B;
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.55;
     }
     .actions {
       display: flex;
@@ -444,7 +472,7 @@
     <div class="grow"></div>
     <div class="card" id="folderCard">
       Stored inside Notely
-      <small id="storeInfo">Use Export note to save a copy to your device.</small>
+      <small id="storeInfo">Use Share or export to copy text or save a file on your device.</small>
       <small id="dirError" class="err-text" hidden></small>
     </div>
     <button class="l" type="button" id="openSettings" aria-haspopup="dialog">Settings</button>
@@ -459,7 +487,8 @@
         <button type="button" class="more-btn" id="more" aria-label="More actions" title="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu">⋮</button>
         <div class="menu" id="moreMenu" role="menu" aria-label="Note actions" hidden>
           <button type="button" class="menu-item" role="menuitem" id="refresh">Regenerate key points</button>
-          <button type="button" class="menu-item" role="menuitem" id="export" hidden title="Save a copy of this note as a file on your device">Export note</button>
+          <button type="button" class="menu-item" role="menuitem" id="copyText" hidden>Copy text</button>
+          <button type="button" class="menu-item" role="menuitem" id="export" hidden title="Copy or save this note as text, Markdown, PDF or a web page">Share or export</button>
           <div class="menu-sep" id="menuSep" role="separator" hidden></div>
           <button type="button" class="menu-item danger" role="menuitem" id="remove" hidden>Delete note</button>
         </div>
@@ -487,14 +516,38 @@
         <textarea id="points" placeholder="One key point per line"></textarea>
       </section>
     </div>
-    <label class="field-label" for="raw">Notes &amp; details</label>
-    <textarea class="raw" id="raw" placeholder="Definitions, steps, code and links found on screen appear here. What you say is added here too. You can edit everything."></textarea>
+    <div class="notes-block">
+      <label class="field-label" for="raw">Notes &amp; details</label>
+      <textarea class="raw" id="raw" placeholder="Definitions, steps, code and links found on screen appear here. What you say is added here too. You can edit everything."></textarea>
+    </div>
     <div class="actions">
       <button class="p" type="button" id="capture" title="Capture screen (Ctrl + Shift + S)">Capture screen</button>
       <button class="g" type="button" id="mic">Start speaking</button>
       <button class="p" type="button" id="save">Save note</button>
     </div>
     <p id="msg" class="muted" role="status" aria-live="polite"></p>
+    <div class="modal" id="share" role="dialog" aria-modal="true" aria-labelledby="shareTitle" hidden>
+      <form class="modal-card" id="shareForm" novalidate>
+        <h2 id="shareTitle">Share or export</h2>
+        <fieldset class="choices">
+          <legend>How to share this note</legend>
+          <label class="choice"><input type="radio" name="shareFormat" value="copy" checked> <span><b>Copy text</b><small>Title, key points and notes. No screenshot.</small></span></label>
+          <label class="choice"><input type="radio" name="shareFormat" value="markdown"> <span><b>Markdown</b><small>A .md file you can open in any editor.</small></span></label>
+          <label class="choice"><input type="radio" name="shareFormat" value="html"> <span><b>Web page</b><small>A single .html file that opens in a browser.</small></span></label>
+          <label class="choice"><input type="radio" name="shareFormat" value="pdf"> <span><b>PDF</b><small>A printable .pdf file.</small></span></label>
+          <label class="choice" id="sharePngChoice"><input type="radio" name="shareFormat" value="png"> <span><b>Screenshot image</b><small>The original capture as a .png file.</small></span></label>
+        </fieldset>
+        <div class="consent" id="shareShotBox">
+          <p>The original screenshot can include private information from your screen. It is left out unless you choose to include it.</p>
+          <label class="check"><input type="checkbox" id="includeShot"> Include the original screenshot</label>
+        </div>
+        <p id="shareMsg" class="muted" role="status" aria-live="polite"></p>
+        <div class="row-btns end">
+          <button type="button" class="l" id="shareCancel">Cancel</button>
+          <button type="submit" class="p" id="shareGo">Share</button>
+        </div>
+      </form>
+    </div>
     <div class="modal" id="settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
       <form class="modal-card" id="settingsForm" novalidate>
         <h2 id="settingsTitle">Settings</h2>
@@ -502,7 +555,7 @@
           <legend>How Notely writes notes from a capture</legend>
           <label class="choice"><input type="radio" name="provider" value="rules"> <span><b>Rules only</b><small>Offline. No AI is used.</small></span></label>
           <label class="choice"><input type="radio" name="provider" value="ollama"> <span><b>Local AI (Ollama)</b><small>Runs on this computer when Ollama is installed; otherwise rules. Nothing leaves your computer.</small></span></label>
-          <label class="choice"><input type="radio" name="provider" value="gemini"> <span><b>Google Gemini (cloud)</b><small>Understands the screenshot itself. Sends it to Google.</small></span></label>
+          <label class="choice"><input type="radio" name="provider" value="gemini"> <span><b>Google Gemini (cloud)</b><small>Sends the screenshot and the text read from it to Google, only after you agree.</small></span></label>
         </fieldset>
         <div class="gemini-box" id="geminiBox" hidden>
           <label class="field-label" for="geminiKey">Gemini API key</label>
@@ -542,6 +595,7 @@
     </div>
     <p id="modelHint" class="muted" hidden>The first transcription downloads a free speech model (~150 MB) and needs internet. Later runs work offline.</p>
   </main>
+  <script src="workflow.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

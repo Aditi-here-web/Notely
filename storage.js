@@ -125,7 +125,20 @@ function normalizeStored(id, json) {
 const SEARCH_CHARS = 20000;
 
 function searchText(n) {
-  return [n.title, ...n.points, n.raw, n.transcript].join('\n').toLowerCase().slice(0, SEARCH_CHARS);
+  const fields = [n.title, ...(n.points || []), n.raw, n.transcript, n.ocrClean]
+    .map((s) => String(s == null ? '' : s).toLowerCase());
+  const joined = fields.join('\n');
+  if (joined.length <= SEARCH_CHARS) return joined;
+  // Fair share so a long notes field cannot drop cleaned OCR (or the reverse).
+  const share = Math.max(1, Math.floor(SEARCH_CHARS / Math.max(1, fields.length)));
+  const clipped = fields.map((s) => s.slice(0, share));
+  let spare = SEARCH_CHARS - clipped.reduce((sum, s) => sum + s.length, 0);
+  for (let i = 0; i < fields.length && spare > 0; i++) {
+    const extra = fields[i].slice(clipped[i].length, clipped[i].length + spare);
+    clipped[i] += extra;
+    spare -= extra.length;
+  }
+  return clipped.join('\n').slice(0, SEARCH_CHARS);
 }
 
 function listNotes(root) {

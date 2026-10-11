@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const {
   processText, processOcr, pickTitle, dedupePoints, composeDetails, detectContentType,
 } = require('../notes-pipeline');
-const { createOllamaProvider, summarizeScreen, summarizeText } = require('../summarizer');
+const { createOllamaProvider, summarizeScreen, summarizeText, screenPrompt } = require('../summarizer');
 const { layout } = require('./layout-fixture');
 
 // --- Titles -------------------------------------------------------------------
@@ -172,6 +172,12 @@ test('a failing or invented AI answer falls back to the rule-based notes', async
   assert.equal(r3.method, 'rules');
   assert.equal(r3.reason, 'failed');
   assert.ok(r3.points.length > 0);
+});
+
+test('the local AI prompt forbids invented URLs, counts and descriptions', () => {
+  const prompt = screenPrompt('Python Lists\nA list is an ordered collection.', 'education');
+  assert.match(prompt, /use only facts that appear in the text/i);
+  assert.match(prompt, /Do not invent or complete URLs, counts, dates or descriptions/);
 });
 
 test('low-content screens are not sent to the AI', async () => {

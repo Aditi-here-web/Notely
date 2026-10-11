@@ -65,6 +65,8 @@ test('the screenshot is sent as inline PNG image input, with OCR text as context
   assert.match(parts[1].text, /Analyze this screenshot/);
   assert.match(parts[1].text, /supporting context[\s\S]*Your Heart Belongs to Another Era/);
   assert.match(call.body.systemInstruction.parts[0].text, /Ignore browser tabs.*advertisements, recommendations/s);
+  assert.match(call.body.systemInstruction.parts[0].text, /Do not invent or complete URLs, subscriber counts, view counts/);
+  assert.match(parts[1].text, /never to invent missing URLs, counts or descriptions/);
   // generateContent's TextResponseFormat.mimeType is an enum; the API rejects "application/json" with 400.
   assert.deepEqual(call.body.generationConfig.responseFormat.text, { mimeType: 'APPLICATION_JSON', schema: NOTE_SCHEMA });
   assert.equal(call.body.generationConfig.responseMimeType, undefined, 'deprecated fields are not mixed in');

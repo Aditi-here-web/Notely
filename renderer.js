@@ -57,19 +57,20 @@ function formatTime(ms) {
   return new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-const STEP_ORDER = ['capture', 'ocr', 'clean', 'review', 'saved'];
+const { WORKFLOW, chipClasses, stepCaption } = globalThis.NotelyWorkflow;
 
 function setStage(stage, failed) {
   state.stage = stage;
-  const active = stage === 'summarize' ? 'clean' : stage;
-  const idx = STEP_ORDER.indexOf(active);
-  for (const li of $('steps').children) {
-    const i = STEP_ORDER.indexOf(li.dataset.step);
-    li.className = '';
-    if (idx < 0) continue;
-    if (i < idx || (stage === 'saved' && i === idx)) li.className = 'done';
-    else if (i === idx) li.className = failed ? 'failed' : 'active';
-  }
+  const classes = chipClasses(stage, failed);
+  [...$('steps').children].forEach((li, i) => {
+    li.className = classes[i] || '';
+    if (WORKFLOW[i] && li.dataset.step !== WORKFLOW[i].id) li.dataset.step = WORKFLOW[i].id;
+    if (WORKFLOW[i]) li.textContent = WORKFLOW[i].label;
+  });
+}
+
+function sayStep(stage, detail, kind) {
+  say(stepCaption(stage, detail), kind);
 }
 
 function setBusy(busy) {
@@ -83,6 +84,7 @@ function setBusy(busy) {
   $('capture').classList.toggle('p', !cancelMode);
   $('refresh').disabled = locked;
   $('save').disabled = locked || !(state.store && state.store.ok);
+  $('copyText').disabled = locked;
   $('export').disabled = locked;
   $('starNote').disabled = locked;
   $('newNote').disabled = locked;
@@ -102,7 +104,10 @@ function markDirty() {
     state.dirty = true;
     renderBadge();
     if (state.stage === 'saved') setStage('review');
+    const hint = draftHint();
+    if (hint && /^Saved note/.test($('ptsNote').textContent)) $('ptsNote').textContent = hint;
   }
+  $('copyText').hidden = !canCopyText();
 }
 
 function confirmDiscard(action) {
@@ -347,12 +352,18 @@ function renderBadge() {
     el.textContent = state.id ? 'Unsaved changes' : 'Unsaved draft';
     el.className = 'badge unsaved';
   } else if (state.id) {
-    el.textContent = `Saved · ${formatTime(state.updatedAt)}`;
+    el.textContent = `Saved note · ${formatTime(state.updatedAt)}`;
     el.className = 'badge saved';
   } else {
     el.textContent = 'New note';
     el.className = 'badge';
   }
+}
+
+function draftHint() {
+  if (state.id && state.dirty) return 'Editing a saved note. Save to keep these changes.';
+  if (state.id) return `Saved note · created ${formatTime(state.createdAt)}`;
+  return '';
 }
 
 // The title is a one-line textarea so long titles wrap instead of being clipped.
@@ -368,7 +379,11 @@ function setTitle(value) {
   fitTitle();
 }
 
-// Every search word must appear in the title, key points or notes (case-insensitive).
+function setRaw(value) {
+  $('raw').value = value || '';
+}
+
+// Every search word must appear in the title, key points, notes, spoken text or cleaned OCR (case-insensitive).
 function visibleNotes() {
   const terms = state.query.toLowerCase().split(/\s+/).filter(Boolean);
   return state.notes.filter((note) => (state.filter !== 'starred' || note.starred)
@@ -423,6 +438,7 @@ function render() {
   renderStore();
   renderStar();
   $('remove').hidden = !state.id;
+  $('copyText').hidden = !canCopyText();
   $('export').hidden = !state.id;
   $('menuSep').hidden = !state.id;
   $('mic').textContent = state.recording ? 'Stop speaking' : 'Start speaking';
@@ -431,6 +447,32 @@ function render() {
 }
 
 // --- Draft management -----------------------------------------------------
+
+// After the user starts a capture, leave the previous note immediately so a
+// saved note is never shown as if it were still open.
+function beginCaptureDraft() {
+  Object.assign(state, {
+    id: null,
+    createdAt: 0,
+    updatedAt: 0,
+    shot: null,
+    shotIsNew: false,
+    capturedAt: 0,
+    ocrText: '',
+    ocrClean: '',
+    transcript: '',
+    starred: false,
+    dirty: false,
+    saveError: false,
+    pointsEdited: false,
+  });
+  closeViewer();
+  setTitle('');
+  setRaw('');
+  setPoints([]);
+  $('ptsNote').textContent = 'Capturing the screen...';
+  render();
+}
 
 function clearDraft() {
   Object.assign(state, {
@@ -448,7 +490,7 @@ function clearDraft() {
     saveError: false,
   });
   setTitle('');
-  $('raw').value = '';
+  setRaw('');
   setPoints([]);
   $('ptsNote').textContent = 'Capture a screen or speak to generate key points. You can also type them, one per line.';
   setStage('idle');
@@ -471,9 +513,9 @@ function applyNote(note) {
     saveError: false,
   });
   setTitle(note.title);
-  $('raw').value = note.raw || '';
+  setRaw(note.raw || '');
   setPoints(note.points);
-  $('ptsNote').textContent = `Saved note · created ${formatTime(note.createdAt)}`;
+  $('ptsNote').textContent = draftHint();
   setStage('saved');
   render();
 }
@@ -536,9 +578,10 @@ async function capture(fromHotkey) {
     if (!confirmDiscard('Capturing starts a new draft. Discard the current changes?')) return;
   }
   try {
+    beginCaptureDraft();
     setBusy(true);
     setStage('capture');
-    say('Step 1 of 4: capturing the screen...');
+    sayStep('capture', 'capturing the screen...');
     await api('capture');
   } catch (err) {
     setStage('capture', true);
@@ -606,26 +649,26 @@ n.on('shot', (payload) => {
   });
   closeViewer();
   setTitle('');
-  $('raw').value = '';
+  setRaw('');
   setPoints([]);
   $('ptsNote').textContent = 'Reading the screen...';
   setStage('ocr');
   render();
   setBusy(true);
   n.open();
-  say('Step 2 of 4: reading text from the screenshot... (Cancel reading keeps the screenshot.)');
+  sayStep('ocr', 'reading text from the screenshot... (Cancel reading keeps the screenshot.)');
 });
 
 n.on('progress', (info) => {
   if (!info || !state.busy) return;
   if (info.stage === 'clean') {
     setStage('clean');
-    say('Step 3 of 4: removing browser, sidebar and duplicate text...');
+    sayStep('clean', 'removing browser, sidebar and duplicate text...');
   } else if (info.stage === 'summarize') {
     setStage('summarize');
-    say(geminiOn()
-      ? 'Step 3 of 4: sending the screenshot to Google Gemini for analysis...'
-      : 'Step 3 of 4: building notes from the main content...');
+    sayStep('summarize', geminiOn()
+      ? 'sending the screenshot to Google Gemini for analysis...'
+      : 'building notes from the main content...');
   }
 });
 
@@ -658,7 +701,7 @@ n.on('ocr', (payload) => {
   if (!$('title').value.trim()) setTitle(note.title);
   const keptPoints = state.pointsEdited && getPoints().length;
   if (!keptPoints) setPoints(note.points);
-  if (!$('raw').value.trim()) $('raw').value = note.details || '';
+  if (!$('raw').value.trim()) setRaw(note.details || '');
   $('ptsNote').textContent = sourceNote({
     method: payload.method, provider: payload.provider, model: payload.model, reason: payload.aiReason, detail: payload.aiDetail,
   }, payload.contentLabel);
@@ -668,7 +711,7 @@ n.on('ocr', (payload) => {
   }
   say(keptPoints
     ? 'Your key points were kept. Click Regenerate key points to replace them with the generated ones.'
-    : 'Step 4 of 4: review and edit the draft, then click Save note. Nothing is saved yet.', 'ok');
+    : stepCaption('review', 'review and edit the draft, then click Save note. Nothing is saved yet.'), 'ok');
 });
 
 n.on('hotkey', () => capture(true));
@@ -775,7 +818,7 @@ async function finishRecording() {
     }
     state.transcript = `${state.transcript} ${text}`.trim();
     const raw = $('raw').value.trim();
-    $('raw').value = raw ? `${raw}\n\n${text}` : text;
+    setRaw(raw ? `${raw}\n\n${text}` : text);
     markDirty();
     if (state.pointsEdited && getPoints().length) {
       say('Added what you said to the notes. Click Regenerate key points to include it in the key points.', 'ok');
@@ -856,7 +899,7 @@ async function save() {
 async function removeNote() {
   if (!state.id) return;
   const title = $('title').value.trim() || 'this note';
-  if (!window.confirm(`Delete "${title}"? This cannot be undone. Files you exported earlier are not affected.`)) return;
+  if (!window.confirm(`Permanently delete "${title}" from Notely? This removes the note and its screenshot. This cannot be undone. Files you already exported are not deleted.`)) return;
   try {
     setBusy(true);
     await api('delete', state.id);
@@ -889,23 +932,125 @@ async function toggleStar(id) {
   }
 }
 
-// Export writes the saved version of the note to a file the user picks.
-async function exportCurrent() {
-  if (!state.id) return;
-  if (state.dirty) {
-    if (!window.confirm('This note has unsaved changes. Save them in Notely before exporting?')) return;
-    if (!(await save())) return;
+function canCopyText() {
+  return !!( $('title').value.trim() || getPoints().length || $('raw').value.trim() );
+}
+
+function currentShareText() {
+  const title = $('title').value.trim() || 'Untitled note';
+  const points = getPoints();
+  const raw = $('raw').value.trim();
+  const spoken = state.transcript.trim();
+  const lines = [title];
+  if (points.length) {
+    lines.push('', 'Key points');
+    for (const p of points) lines.push(`- ${p}`);
+  }
+  if (raw) lines.push('', 'Notes', raw);
+  if (spoken) lines.push('', 'What you said', spoken);
+  return `${lines.join('\n')}\n`;
+}
+
+async function copyCurrentText() {
+  const text = currentShareText();
+  if (!text.trim() || text === 'Untitled note\n') {
+    say('Nothing to copy yet.', 'err');
+    return;
   }
   try {
-    setBusy(true);
-    say('Choose where to export the note...');
-    const result = await api('export', state.id);
+    await api('copy-text', text);
+    say('Copied the note text. The screenshot was not copied.', 'ok');
+  } catch (err) {
+    say(err.message || 'Could not copy the note.', 'err');
+  }
+}
+
+const shareUi = { opener: null, cleanup: null };
+
+function shareFormat() {
+  const r = document.querySelector('input[name="shareFormat"]:checked');
+  return r ? r.value : 'copy';
+}
+
+function renderShareOptions() {
+  const hasShot = !!state.shot;
+  $('sharePngChoice').hidden = !hasShot;
+  if (shareFormat() === 'png' && !hasShot) {
+    document.querySelector('input[name="shareFormat"][value="copy"]').checked = true;
+  }
+  const format = shareFormat();
+  const prev = shareUi.format;
+  shareUi.format = format;
+  $('includeShot').disabled = format === 'copy' || format === 'png' || !hasShot;
+  if (format === 'copy' || !hasShot) $('includeShot').checked = false;
+  else if (format === 'png') $('includeShot').checked = true;
+  else if (prev === 'png') $('includeShot').checked = false;
+  $('shareShotBox').hidden = format === 'copy' || format === 'png' || !hasShot;
+}
+
+function shareSay(text, kind) {
+  const el = $('shareMsg');
+  el.textContent = text || '';
+  el.className = kind === 'err' ? 'err' : kind === 'ok' ? 'ok' : 'muted';
+}
+
+async function openShare() {
+  if (!state.id || !$('share').hidden) return;
+  if (state.dirty) {
+    if (!window.confirm('This note has unsaved changes. Save them in Notely before sharing?')) return;
+    if (!(await save())) return;
+  }
+  shareUi.opener = document.activeElement;
+  closeMenu(false);
+  document.querySelector('input[name="shareFormat"][value="copy"]').checked = true;
+  $('includeShot').checked = false;
+  shareUi.format = 'copy';
+  shareSay('');
+  renderShareOptions();
+  $('share').hidden = false;
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeShare();
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
+  shareUi.cleanup = () => document.removeEventListener('keydown', onKey, true);
+  (document.querySelector('input[name="shareFormat"]:checked') || $('shareCancel')).focus();
+}
+
+function closeShare() {
+  if ($('share').hidden) return;
+  if (shareUi.cleanup) shareUi.cleanup();
+  shareUi.cleanup = null;
+  $('share').hidden = true;
+  const back = shareUi.opener;
+  shareUi.opener = null;
+  if (back && document.contains(back)) back.focus();
+}
+
+async function submitShare(e) {
+  e.preventDefault();
+  const format = shareFormat();
+  if (format === 'copy') {
+    closeShare();
+    await copyCurrentText();
+    return;
+  }
+  if (!state.id) return;
+  $('shareGo').disabled = true;
+  try {
+    say(format === 'png' ? 'Choose where to save the screenshot...' : 'Choose where to export the note...');
+    const result = await api('export', { id: state.id, format, includeShot: $('includeShot').checked === true });
+    closeShare();
     if (result.canceled) say('Export cancelled. The note is still saved in Notely.');
     else say(`Exported to ${result.path}`, 'ok');
   } catch (err) {
+    shareSay(err.message || 'Could not export the note.', 'err');
     say(`${err.message || 'Export failed.'} The note is still saved in Notely.`, 'err');
   } finally {
-    setBusy(false);
+    $('shareGo').disabled = false;
   }
 }
 
@@ -1168,7 +1313,12 @@ document.querySelector('main').addEventListener('scroll', () => closeMenu(false)
 $('capture').addEventListener('click', () => (state.reading ? cancelReading() : capture(false)));
 $('mic').addEventListener('click', toggleMic);
 $('save').addEventListener('click', save);
-$('export').addEventListener('click', exportCurrent);
+$('copyText').addEventListener('click', copyCurrentText);
+$('export').addEventListener('click', openShare);
+$('shareCancel').addEventListener('click', closeShare);
+$('shareForm').addEventListener('submit', submitShare);
+$('share').addEventListener('click', (e) => { if (e.target === $('share')) closeShare(); });
+for (const r of document.querySelectorAll('input[name="shareFormat"]')) r.addEventListener('change', renderShareOptions);
 $('starNote').addEventListener('click', () => { if (state.id) toggleStar(state.id); });
 $('refresh').addEventListener('click', regeneratePoints);
 $('newNote').addEventListener('click', newNote);

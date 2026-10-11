@@ -92,7 +92,7 @@ const TYPE_GUIDANCE = {
 function screenPrompt(cleanText, type) {
   return `You turn text captured from a screen into concise study notes.
 ${TYPE_GUIDANCE[type] || TYPE_GUIDANCE.general}
-Rules: use only facts that appear in the text. Do not add outside knowledge. Do not repeat the same idea twice.
+Rules: use only facts that appear in the text. Do not add outside knowledge. Do not invent or complete URLs, counts, dates or descriptions that are not in the text. Do not repeat the same idea twice.
 Each point is one clear sentence. Ignore menus, buttons, ads and recommendations.
 Screen text:
 """

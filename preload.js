@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const invoke = new Set(['capture', 'cancel', 'polish', 'transcribe', 'save', 'list', 'note', 'delete', 'star', 'export', 'caps', 'settings-get', 'settings-save', 'settings-test']);
+const invoke = new Set(['capture', 'cancel', 'polish', 'transcribe', 'save', 'list', 'note', 'delete', 'star', 'export', 'copy-text', 'caps', 'settings-get', 'settings-save', 'settings-test']);
 const listen = new Set(['shot', 'ocr', 'asr', 'progress', 'hotkey', 'notice', 'app-error']);
 
 contextBridge.exposeInMainWorld('n', {

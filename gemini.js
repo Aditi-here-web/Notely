@@ -33,7 +33,9 @@ const NOTE_SCHEMA = {
 
 const SYSTEM_PROMPT = `You turn screenshots into accurate, well-organized study notes.
 Identify the main content the user is looking at. Ignore browser tabs, address bars, toolbars, menus, navigation, sidebars, advertisements, recommendations, comments, notifications and other unrelated interface text.
-Use only what is visible in the screenshot. Do not add outside facts. If something is unreadable or cut off, say so in warnings instead of guessing.
+Use only what is visible in the screenshot. Do not add outside facts, and do not use general knowledge about the site, video, channel or topic.
+Do not invent or complete URLs, subscriber counts, view counts, dates, descriptions, names or any other detail that is not clearly readable. If a number, URL or description is cut off or missing, omit it or mention that in warnings — never fill it in.
+If you would have to infer something that is not written or shown, leave it out of the title, key points and detailed notes.
 Keep code, commands, URLs, file names, numbers and technical terms exactly as shown.
 Do not repeat the same idea in several key points.`;
 
@@ -141,7 +143,7 @@ function analysisPrompt({ ocrText, spoken, hasImage }) {
   lines.push(`contentType must be one of: ${CONTENT_TYPE_IDS.join(', ')}.`);
   const ocr = cleanText(ocrText, LIMITS.ocr);
   if (ocr) {
-    lines.push('Text read from the screen by OCR (may be incomplete or mixed with unrelated interface text; use it only as supporting context):');
+    lines.push('Text read from the screen by OCR (may be incomplete or mixed with unrelated interface text; use it only as supporting context, and never to invent missing URLs, counts or descriptions):');
     lines.push(`"""\n${ocr}\n"""`);
   }
   const said = cleanText(spoken, LIMITS.text);

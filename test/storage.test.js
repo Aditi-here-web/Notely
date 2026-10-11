@@ -225,9 +225,25 @@ test('star/unstar persists and changes nothing else; edits keep the star', (t) =
 
 test('list includes lowercase search text from title, key points and notes', (t) => {
   const root = tmpRoot(t);
-  save(root, { title: 'Photosynthesis', points: ['Chlorophyll absorbs LIGHT'], raw: 'Happens in the Leaves' });
+  save(root, { title: 'Photosynthesis', points: ['Chlorophyll absorbs LIGHT'], raw: 'Happens in the Leaves', ocrClean: 'Calvin cycle on screen' });
   const [n] = storage.listNotes(root).notes;
-  for (const term of ['photosynthesis', 'chlorophyll', 'light', 'leaves']) assert.ok(n.search.includes(term), term);
+  for (const term of ['photosynthesis', 'chlorophyll', 'light', 'leaves', 'calvin']) assert.ok(n.search.includes(term), term);
+});
+
+test('search still finds cleaned OCR when the notes field is longer than the index', (t) => {
+  const root = tmpRoot(t);
+  const token = 'calvinxyzindex';
+  save(root, {
+    title: 'Long note',
+    points: ['A short point'],
+    raw: `${'x'.repeat(25000)} unique body word mitochondria`,
+    ocrClean: `On-screen text about the ${token} pathway.`,
+  });
+  const [n] = storage.listNotes(root).notes;
+  assert.ok(n.search.length <= 20000, 'search blob stays capped');
+  assert.ok(n.search.includes(token), 'ocrClean is indexed even when notes are long');
+  assert.ok(n.search.includes('long note'));
+  assert.ok(n.search.includes('short point'));
 });
 
 test('import copies old notes once, keeps originals, and never duplicates', (t) => {

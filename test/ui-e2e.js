@@ -49,7 +49,12 @@ async function cdp(url) {
   };
   const evaluate = (expression, commandLine = false) => new Promise((resolve, reject) => {
     const id = ++seq;
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`evaluate timed out: ${String(expression).slice(0, 80)}`));
+    }, 15000);
     pending.set(id, (msg) => {
+      clearTimeout(timer);
       const r = msg.result || {};
       if (msg.error || r.exceptionDetails) reject(new Error(JSON.stringify(msg.error || r.exceptionDetails)));
       else resolve(r.result && r.result.value);
@@ -60,7 +65,14 @@ async function cdp(url) {
   });
   const call = (method, params = {}) => new Promise((resolve, reject) => {
     const id = ++seq;
-    pending.set(id, (msg) => (msg.error ? reject(new Error(JSON.stringify(msg.error))) : resolve(msg.result)));
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`cdp ${method} timed out`));
+    }, 15000);
+    pending.set(id, (msg) => {
+      clearTimeout(timer);
+      return msg.error ? reject(new Error(JSON.stringify(msg.error))) : resolve(msg.result);
+    });
     ws.send(JSON.stringify({ id, method, params }));
   });
   return { evaluate, call, close: () => { try { ws.close(); } catch { /* closed */ } } };
@@ -138,6 +150,16 @@ const type = (id, value) => `(() => { const el = document.getElementById(${JSON.
 const click = (id) => `document.getElementById(${JSON.stringify(id)}).click()`;
 const val = (id) => `document.getElementById(${JSON.stringify(id)}).value`;
 const text = (id) => `document.getElementById(${JSON.stringify(id)}).textContent`;
+const editorBox = (id) => `(() => {
+  const el = document.getElementById(${JSON.stringify(id)});
+  const cs = getComputedStyle(el);
+  return {
+    overflowY: cs.overflowY, overscroll: cs.overscrollBehaviorY || cs.overscrollBehavior,
+    canScroll: el.scrollHeight > el.clientHeight + 1,
+    clientH: Math.round(el.clientHeight), scrollH: el.scrollHeight,
+    minH: parseFloat(cs.minHeight), maxH: cs.maxHeight, fontSize: parseFloat(cs.fontSize),
+  };
+})()`;
 const cards = `[...document.querySelectorAll('#list .card')].map((c) => c.firstChild.textContent)`;
 
 async function save(app) {
@@ -206,6 +228,37 @@ const menuOpen = `!document.getElementById('moreMenu').hidden`;
 const menuItemsShown = `[...document.querySelectorAll('#moreMenu [role=menuitem]')].filter((b) => !b.hidden).map((b) => b.textContent.trim())`;
 
 // Secondary actions live in the ⋮ menu: open it, pick the item, and the menu must close.
+async function openShareDialog(app) {
+  await menuAction(app, 'export');
+  await waitFor(app, `!document.getElementById('share').hidden`, 'share dialog');
+}
+
+async function selectShareFormat(app, format) {
+  await app.page(`document.querySelector('input[name=shareFormat][value=${JSON.stringify(format)}]').click()`);
+}
+
+async function shareOptions(app) {
+  return app.page(`({
+    format: document.querySelector('input[name=shareFormat]:checked').value,
+    includeShot: document.getElementById('includeShot').checked,
+    includeDisabled: document.getElementById('includeShot').disabled,
+    shotBoxHidden: document.getElementById('shareShotBox').hidden,
+  })`);
+}
+
+async function completeShare(app, { format = 'html', includeShot = false, viaPng = false } = {}) {
+  await openShareDialog(app);
+  if (viaPng) await selectShareFormat(app, 'png');
+  await selectShareFormat(app, format);
+  if (format !== 'copy' && format !== 'png') {
+    const after = await shareOptions(app);
+    if (viaPng) assert.equal(after.includeShot, false, `PNG -> ${format} leaves the screenshot unchecked`);
+  }
+  if (includeShot) await app.page('document.getElementById("includeShot").checked = true');
+  else if (format !== 'png') await app.page('document.getElementById("includeShot").checked = false');
+  await app.page(click('shareGo'));
+}
+
 async function menuAction(app, id) {
   await app.page(click('more'));
   await waitFor(app, menuOpen, 'menu open');
@@ -459,7 +512,7 @@ async function main() {
     assert.deepEqual({ ...removed, buttons: undefined }, { discard: false, ocrBox: false, chip: false, screenText: false, buttons: undefined });
     assert.deepEqual(removed.buttons, ['Capture screen', 'Start speaking', 'Save note']);
     assert.equal(await app.page(menuOpen), false);
-    assert.deepEqual(await app.page(menuItemsShown), ['Regenerate key points'], 'a new draft only offers Regenerate');
+    assert.deepEqual(await app.page(menuItemsShown), ['Regenerate key points'], 'an empty draft only offers Regenerate');
     assert.equal(await app.main(`__req('electron').globalShortcut.isRegistered('CommandOrControl+Shift+S')`), true);
     step('shortcut chip, Discard button and screen-text panel are gone; Ctrl+Shift+S is still registered');
 
@@ -489,15 +542,20 @@ async function main() {
     assert.ok((await app.page(visibleTitles)).includes('Photosynthesis basics'));
     const badges = await app.page('window.__badges');
     assert.ok(badges.includes('Unsaved draft') && badges.includes('Saving…'), badges.join(' / '));
-    assert.match(await app.page(text('draftState')), /^Saved · /);
-    step(`note saved inside Notely (${path.join(store, idA)}) and listed; status went Unsaved draft → Saving… → Saved`);
+    assert.match(await app.page(text('draftState')), /^Saved note · /);
+    step(`note saved inside Notely (${path.join(store, idA)}) and listed; status went Unsaved draft → Saving… → Saved note`);
 
     const fixtureSize = await useFixtureScreen(app);
     const aiStatus = (await app.page(`api('caps')`)).ai;
     const captureDone = `/Step 4|meaningful content|could not be read|kept/i.test(${text('msg')}) && document.getElementById('capture').textContent === 'Capture screen'`;
 
+    const stepChips = await app.page(`[...document.querySelectorAll('#steps li')].map((li) => li.textContent.trim())`);
+    assert.deepEqual(stepChips, ['1. Capture', '2. Read text', '3. Clean & summarize', '4. Review & edit', '5. Save']);
+
     // Cancel: the first read of a session also starts the OCR engine, so there is time to cancel it.
+    // Capture must leave the saved note immediately so it is not shown as still open.
     await app.page(click('capture'));
+    await waitFor(app, `${val('title')} === '' && !document.querySelector('#list .card.current')`, 'capture started a new draft');
     await waitFor(app, `document.getElementById('capture').textContent === 'Cancel reading'`, 'reading started', 20000);
     await app.page(click('capture'));
     await waitFor(app, `/Reading cancelled/.test(${text('msg')})`, 'reading cancelled', 20000);
@@ -511,7 +569,15 @@ async function main() {
     await app.page(click('capture'));
     await waitFor(app, captureDone, 'capture processed', 90000);
     const capMsg = await app.page(text('msg'));
-    assert.match(capMsg, /Step 4/, capMsg);
+    assert.match(capMsg, /Step 4 of 5/, capMsg);
+    const thumbFit = await app.page(`(() => {
+      const img = document.getElementById('shot'); const box = document.getElementById('preview').getBoundingClientRect();
+      const r = img.getBoundingClientRect();
+      return { ratio: r.width / r.height, nat: img.naturalWidth / img.naturalHeight,
+        fits: r.width <= box.width + 1 && r.height <= box.height + 1, used: r.height / box.height };
+    })()`);
+    assert.ok(Math.abs(thumbFit.ratio - thumbFit.nat) < 0.03, `preview keeps aspect ratio (${thumbFit.ratio} vs ${thumbFit.nat})`);
+    assert.equal(thumbFit.fits, true, 'preview is not cropped or overflowing its box');
     const capTitle = await app.page(val('title'));
     assert.equal(capTitle, 'Your Heart Belongs to Another Era', 'complete heading without "POV:" or the tab text');
     const capPoints = (await app.page(val('points'))).split('\n').filter(Boolean);
@@ -523,6 +589,39 @@ async function main() {
     if (aiStatus && aiStatus.available) assert.match(ptsNote, /local AI|rules, not AI/);
     else assert.match(ptsNote, /Extracted with rules, not AI\. Detected: video\. AI summary unavailable: no local AI model found\./);
     step(`capture -> "${capTitle}"; ${capPoints.length} key point(s), no duplicates; status: "${ptsNote}"`);
+
+    const rawCss = await app.page(editorBox('raw'));
+    const ptsCss = await app.page(editorBox('points'));
+    assert.equal(rawCss.overflowY, 'auto');
+    assert.notEqual(rawCss.maxH, 'none', 'Notes & details has a maximum height');
+    assert.ok(rawCss.minH >= 96, 'Notes & details has a usable minimum height');
+    assert.equal(ptsCss.overflowY, 'auto');
+    assert.ok(ptsCss.fontSize >= 14.5, `key points stay readable (${ptsCss.fontSize}px)`);
+    await app.page(type('raw', 'A short note about this playlist.'));
+    await app.page(type('points', 'One short key point.'));
+    assert.equal((await app.page(editorBox('raw'))).canScroll, false, 'short notes do not show an inner scrollbar');
+    assert.equal((await app.page(editorBox('points'))).canScroll, false, 'short key points do not show an inner scrollbar');
+
+    const longScript = Array.from({ length: 36 }, (_, i) => `Line ${i + 1}: a longer script about chlorophyll, light reactions and the Calvin cycle.`).join('\n');
+    await app.page(type('raw', longScript));
+    const longRaw = await app.page(editorBox('raw'));
+    assert.equal(longRaw.canScroll, true, 'long Notes & details become scrollable');
+    assert.ok(longRaw.clientH + 1 < longRaw.scrollH, 'the editor does not grow to the full script');
+    await app.page(`document.getElementById('raw').scrollTop = document.getElementById('raw').scrollHeight`);
+    assert.ok(await app.page(`document.getElementById('raw').scrollTop > 20`), 'the end of Notes & details is reachable');
+    assert.match(await app.page(val('raw')), /Line 36: a longer script/);
+    const longPoints = Array.from({ length: 18 }, (_, i) => `Key point ${i + 1} about lists, chlorophyll and light-dependent reactions.`).join('\n');
+    await app.page(type('points', longPoints));
+    const longPts = await app.page(editorBox('points'));
+    assert.equal(longPts.canScroll, true, 'long key points become scrollable');
+    await app.page(`document.getElementById('points').scrollTop = document.getElementById('points').scrollHeight`);
+    assert.ok(await app.page(`document.getElementById('points').scrollTop > 10`), 'the last key point is reachable');
+    assert.equal(await app.page(val('points')), longPoints);
+    await app.page(`document.querySelector('main').scrollTop = 9999`);
+    assert.equal(await app.page(`(() => { const s = document.getElementById('save').getBoundingClientRect(); const m = document.querySelector('main').getBoundingClientRect();
+      return s.width > 0 && s.bottom <= m.bottom + 2 && s.top < m.bottom; })()`), true, 'Save stays reachable by scrolling the main column');
+    await app.page(`document.querySelector('main').scrollTop = 0`);
+    step('short notes have no inner scrollbar; long Notes and Key points scroll inside a capped editor; Save stays reachable');
 
     // Regenerate key points: uses the stored screen text, keeps the title and the user's Notes & details.
     await app.page(type('title', 'My own title'));
@@ -587,7 +686,10 @@ async function main() {
     await app.page(`document.querySelector('[data-id=${JSON.stringify(idA)}]').click()`);
     await waitFor(app, `${val('title')} === 'Photosynthesis basics'`, 'note A open');
     await app.page(type('raw', 'Happens in the leaves of green plants.\nMitochondria are a separate topic.'));
+    assert.match(await app.page(text('draftState')), /^Unsaved changes/);
+    assert.match(await app.page(text('ptsNote')), /Editing a saved note/);
     assert.match(await save(app), /^Saved in Notely/);
+    assert.match(await app.page(text('draftState')), /^Saved note · /);
     assert.equal(noteIds(store).length, oldIds.length + 2);
 
     // 5. Search by title, key point and detailed notes; case-insensitive.
@@ -599,10 +701,18 @@ async function main() {
     assert.deepEqual(await find('OXYGEN'), ['Photosynthesis basics']);
     assert.deepEqual(await find('mitochondria'), ['Photosynthesis basics']);
     assert.deepEqual(await find('leaves plants'), ['Photosynthesis basics']);
+    const ocrOnly = `calvin${crypto.randomUUID().slice(0, 8)}`;
+    const noteAFile = path.join(store, idA, 'note.json');
+    const noteAData = JSON.parse(fs.readFileSync(noteAFile, 'utf8'));
+    noteAData.ocrClean = `On-screen text about the ${ocrOnly} pathway.`;
+    fs.writeFileSync(noteAFile, JSON.stringify(noteAData, null, 2));
+    await app.page('loadNotes()');
+    await waitFor(app, `state.notes.some((n) => n.id === ${JSON.stringify(idA)} && n.search.includes(${JSON.stringify(ocrOnly)}))`, 'ocr text indexed');
+    assert.deepEqual(await find(ocrOnly), ['Photosynthesis basics']);
     assert.deepEqual(await search(app, nothing), []);
     assert.match(await app.page(text('listEmpty')), new RegExp(`No notes match "${nothing}"`));
     assert.equal((await search(app, '')).length, oldIds.length + 2);
-    step('search matches title, key points and notes (case-insensitive); empty and no-result states shown');
+    step('search matches title, key points, notes and cleaned OCR (case-insensitive); empty and no-result states shown');
 
     // 4 + 6. Star from the header; Starred filter alone and with search.
     await app.page(`document.querySelector('[data-id=${JSON.stringify(idB)}]').click()`);
@@ -628,6 +738,19 @@ async function main() {
       const bad = await app.page(`[...document.querySelectorAll('html, body, aside, main, .note-row, .head, .actions, #title')]
         .filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.id || el.className || el.tagName)`);
       assert.deepEqual(bad, [], `no horizontal overflow at ${label}`);
+      const editors = await app.page(`(() => {
+        const info = (id) => { const el = document.getElementById(id); const cs = getComputedStyle(el);
+          return { overflowY: cs.overflowY, maxH: cs.maxHeight, fontSize: parseFloat(cs.fontSize) }; };
+        return { raw: info('raw'), points: info('points') };
+      })()`);
+      assert.equal(editors.raw.overflowY, 'auto', `Notes overflow-y at ${label}`);
+      assert.notEqual(editors.raw.maxH, 'none', `Notes max-height at ${label}`);
+      assert.equal(editors.points.overflowY, 'auto', `Key points overflow-y at ${label}`);
+      assert.ok(editors.points.fontSize >= 14.5, `Key points readable at ${label}`);
+      await app.page(`document.querySelector('main').scrollTop = 9999`);
+      assert.equal(await app.page(`(() => { const s = document.getElementById('save').getBoundingClientRect(); const m = document.querySelector('main').getBoundingClientRect();
+        return s.width > 0 && s.right <= document.documentElement.clientWidth && s.bottom <= m.bottom + 2 && s.top < m.bottom; })()`), true, `Save reachable at ${label}`);
+      await app.page(`document.querySelector('main').scrollTop = 0`);
       const wrapped = await app.page(`[...document.querySelectorAll('.actions button')].filter((b) => !b.hidden)
         .every((b) => { const r = b.getBoundingClientRect(); return r.right <= document.documentElement.clientWidth && r.width > 0; })`);
       assert.equal(wrapped, true, `all action buttons visible at ${label}`);
@@ -671,7 +794,7 @@ async function main() {
 
     // Menu contents and keyboard use.
     await app.page(click('more'));
-    assert.deepEqual(await app.page(menuItemsShown), ['Regenerate key points', 'Export note', 'Delete note']);
+    assert.deepEqual(await app.page(menuItemsShown), ['Regenerate key points', 'Copy text', 'Share or export', 'Delete note']);
     const menuInfo = await app.page(`(() => { const sep = document.getElementById('menuSep'); const del = document.getElementById('remove');
       return { focus: document.activeElement.id, sepBeforeDelete: !sep.hidden && sep.nextElementSibling === del,
         danger: del.classList.contains('danger') && getComputedStyle(del).color !== getComputedStyle(document.getElementById('export')).color,
@@ -679,6 +802,8 @@ async function main() {
     assert.deepEqual(menuInfo, { focus: 'refresh', sepBeforeDelete: true, danger: true, expanded: 'true', label: 'More actions' });
     const key = (k) => app.page(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(k)}, bubbles: true, cancelable: true }))`);
     const focused = () => app.page('document.activeElement.id');
+    await key('ArrowDown');
+    assert.equal(await focused(), 'copyText');
     await key('ArrowDown');
     assert.equal(await focused(), 'export');
     await key('ArrowDown');
@@ -695,9 +820,10 @@ async function main() {
     assert.equal(await app.page(menuOpen), true);
     assert.equal(await focused(), 'remove', 'ArrowUp on the button opens at the last item');
     await key('Escape');
-    step('menu lists Regenerate, Export and a separated red Delete; arrow keys, Home/End and Escape work');
+    step('menu lists Regenerate, Copy text, Share or export and a separated red Delete; arrow keys, Home/End and Escape work');
 
     // Screenshot viewer: real mouse input through DevTools, note untouched.
+    step('opening the screenshot viewer');
     const noteBJson = fs.readFileSync(path.join(store, idB, 'note.json'), 'utf8');
     const badgeB = await app.page(text('draftState'));
     const [natW, natH] = pngSize(path.join(store, idB, 'screenshot.png'));
@@ -709,8 +835,7 @@ async function main() {
     const hint = await app.page(`(() => { const b = document.getElementById('zoomShot'); return { label: b.getAttribute('aria-label'), cursor: getComputedStyle(b).cursor, hint: !!b.querySelector('.zoom-hint') }; })()`);
     assert.deepEqual(hint, { label: 'Enlarge screenshot', cursor: 'zoom-in', hint: true });
 
-    const thumb = await rect('#shot');
-    await clickAt(thumb.x + thumb.w / 2, thumb.y + thumb.h / 2);
+    await app.page(`(() => { const b = document.getElementById('zoomShot'); b.focus(); b.click(); })()`);
     await waitFor(app, `${viewerOpen} && !document.getElementById('viewerImg').hidden && document.getElementById('viewerImg').naturalWidth > 0`, 'viewer open');
     await sleep(250);
     const view = await app.page(`(() => { const img = document.getElementById('viewerImg'); const r = img.getBoundingClientRect(); const s = document.getElementById('viewerStage').getBoundingClientRect();
@@ -773,10 +898,16 @@ async function main() {
     assert.equal(fs.readdirSync(path.join(store, idB)).sort().join(','), 'note.json,screenshot.png', 'no extra files');
     step(`viewer: ${natW}x${natH} screenshot at ${fitPct}% fit, zoom in/out, 100%, wheel, drag-pan, fit, Escape and backdrop close; note unchanged`);
 
-    // 7. Export: one HTML file with content and embedded screenshot, and it opens.
+    // 7. Share: copy text (no screenshot), then HTML with an opted-in screenshot.
     const jsonB = fs.readFileSync(path.join(store, idB, 'note.json'), 'utf8');
+    await menuAction(app, 'copyText');
+    await waitFor(app, `/Copied the note text/.test(${text('msg')})`, 'copied');
+    const copied = await app.main(`__req('electron').clipboard.readText()`);
+    assert.match(copied, new RegExp(readNote(store, idB).title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(copied, /^[\s\S]*Key points\n- /);
+    assert.ok(!copied.includes('data:image'), 'copy never includes the screenshot');
     await app.main(`__req('electron').dialog.showSaveDialog = async (w, o) => { globalThis.__suggested = o.defaultPath; return { canceled: false, filePath: ${JSON.stringify(target)} }; }`);
-    await menuAction(app, 'export');
+    await completeShare(app, { format: 'html', includeShot: true });
     await waitFor(app, `/^Exported to /.test(${text('msg')})`, 'export done');
     assert.equal(await app.page(text('msg')), `Exported to ${target}`);
     const suggested = await app.main('globalThis.__suggested');
@@ -796,15 +927,76 @@ async function main() {
     assert.equal(fs.readFileSync(path.join(store, idB, 'note.json'), 'utf8'), jsonB, 'export does not change the note');
     step(`exported ${target}; opens in a browser window with title and ${opened.img}px-wide screenshot`);
 
+    await openShareDialog(app);
+    for (const format of ['markdown', 'html', 'pdf']) {
+      await selectShareFormat(app, 'png');
+      assert.deepEqual(await shareOptions(app), {
+        format: 'png', includeShot: true, includeDisabled: true, shotBoxHidden: true,
+      });
+      await selectShareFormat(app, format);
+      const after = await shareOptions(app);
+      assert.equal(after.format, format);
+      assert.equal(after.includeShot, false, `PNG -> ${format} resets include screenshot`);
+      assert.equal(after.includeDisabled, false);
+      assert.equal(after.shotBoxHidden, false);
+    }
+    await app.page(click('shareCancel'));
+    await waitFor(app, `document.getElementById('share').hidden`, 'share dialog closed after PNG switch');
+
+    const htmlNoShot = path.join(exportDir, 'no-shot.html');
+    await app.main(`__req('electron').dialog.showSaveDialog = async () => ({ canceled: false, filePath: ${JSON.stringify(htmlNoShot)} })`);
+    await completeShare(app, { format: 'html', viaPng: true });
+    await waitFor(app, `/^Exported to /.test(${text('msg')})`, 'html without screenshot');
+    const htmlPlain = fs.readFileSync(htmlNoShot, 'utf8');
+    assert.ok(htmlPlain.includes(noteB.title));
+    assert.ok(!htmlPlain.includes('data:image'), 'HTML omits the screenshot unless opted in');
+
+    const mdTarget = path.join(exportDir, 'note.md');
+    await app.main(`__req('electron').dialog.showSaveDialog = async () => ({ canceled: false, filePath: ${JSON.stringify(mdTarget)} })`);
+    await completeShare(app, { format: 'markdown', viaPng: true });
+    await waitFor(app, `/^Exported to /.test(${text('msg')})`, 'markdown export');
+    const md = fs.readFileSync(mdTarget, 'utf8');
+    assert.ok(md.includes(`# ${noteB.title}`));
+    assert.match(md, /## Key points/);
+    assert.ok(!md.includes('data:image'), 'Markdown omits the screenshot unless opted in');
+
+    const pdfTarget = path.join(exportDir, 'note.pdf');
+    await app.main(`__req('electron').dialog.showSaveDialog = async () => ({ canceled: false, filePath: ${JSON.stringify(pdfTarget)} })`);
+    await completeShare(app, { format: 'pdf', viaPng: true });
+    await waitFor(app, `/^Exported to /.test(${text('msg')})`, 'pdf export', 40000);
+    const pdfNoShot = fs.readFileSync(pdfTarget);
+    assert.equal(pdfNoShot.subarray(0, 4).toString(), '%PDF');
+    assert.ok(!pdfNoShot.includes(fs.readFileSync(path.join(store, idB, 'screenshot.png'))), 'PDF without opt-in does not embed the PNG bytes');
+
+    const pdfShotTarget = path.join(exportDir, 'note-shot.pdf');
+    await app.main(`__req('electron').dialog.showSaveDialog = async () => ({ canceled: false, filePath: ${JSON.stringify(pdfShotTarget)} })`);
+    await completeShare(app, { format: 'pdf', includeShot: true });
+    await waitFor(app, `/^Exported to /.test(${text('msg')})`, 'pdf with screenshot', 40000);
+    const pdfShot = fs.readFileSync(pdfShotTarget);
+    assert.equal(pdfShot.subarray(0, 4).toString(), '%PDF');
+    assert.match(pdfShot.toString('latin1'), /\/Subtype\s*\/Image/, 'opted-in PDF contains an image XObject');
+    assert.ok(pdfShot.length > pdfNoShot.length, 'PDF with screenshot is larger than the text-only PDF');
+
+    const pngTarget = path.join(exportDir, 'shot.png');
+    await app.main(`__req('electron').dialog.showSaveDialog = async () => ({ canceled: false, filePath: ${JSON.stringify(pngTarget)} })`);
+    await completeShare(app, { format: 'png' });
+    await waitFor(app, `/^Exported to /.test(${text('msg')})`, 'png export');
+    assert.ok(fs.readFileSync(pngTarget).equals(fs.readFileSync(path.join(store, idB, 'screenshot.png'))));
+    step('share also writes HTML without screenshot, Markdown, PDF (with and without screenshot) and the original PNG');
+
+    await openShareDialog(app);
+    await app.page(click('shareCancel'));
+    await waitFor(app, `document.getElementById('share').hidden`, 'share dialog cancelled');
+
     // 8. Cancel export, and refuse to silently overwrite.
     await app.main(`__req('electron').dialog.showSaveDialog = async () => ({ canceled: true, filePath: '' })`);
-    await menuAction(app, 'export');
+    await completeShare(app, { format: 'html' });
     await waitFor(app, `/Export cancelled/.test(${text('msg')})`, 'export cancelled');
     const exported = fs.readFileSync(target);
     await app.main(`(() => { const { dialog } = __req('electron');
       dialog.showSaveDialog = async () => ({ canceled: false, filePath: ${JSON.stringify(target)} });
       dialog.showMessageBox = async () => { globalThis.__replaceAsked = true; return { response: 1 }; }; })()`);
-    await menuAction(app, 'export');
+    await completeShare(app, { format: 'html' });
     await waitFor(app, `/Export cancelled/.test(${text('msg')})`, 'overwrite declined');
     assert.equal(await app.main('globalThis.__replaceAsked'), true);
     assert.ok(fs.readFileSync(target).equals(exported));
@@ -885,7 +1077,7 @@ async function main() {
     await app.page(`window.confirm = (m) => { window.__msg = m; return true; }`);
     await menuAction(app, 'remove');
     await waitFor(app, `/^Note deleted/.test(${text('msg')})`, 'delete');
-    assert.match(await app.page('window.__msg'), /Delete "Photosynthesis basics"/);
+    assert.match(await app.page('window.__msg'), /Permanently delete "Photosynthesis basics" from Notely\? This removes the note and its screenshot\. This cannot be undone\. Files you already exported are not deleted\./);
     assert.equal(fs.existsSync(path.join(store, idA)), false);
     assert.deepEqual(noteIds(store).sort(), others.sort());
     assert.ok(fs.existsSync(path.join(store, idB, 'screenshot.png')));
