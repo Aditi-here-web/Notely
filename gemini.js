@@ -16,7 +16,7 @@ const NOTE_SCHEMA = {
     title: { type: 'string', description: 'Short, specific title of the main subject (at most 70 characters). Not the website, app or channel name.' },
     contentType: { type: 'string', enum: CONTENT_TYPE_IDS, description: 'Kind of content on screen.' },
     mainIdea: { type: 'string', description: 'One or two sentences: what the screen is mainly about.' },
-    keyPoints: { type: 'array', items: { type: 'string' }, description: '3 to 7 concise, non-overlapping key points.' },
+    keyPoints: { type: 'array', items: { type: 'string' }, description: 'Up to 7 concise, non-overlapping key points about what is actually shown. Use fewer, even one, when the screen has little useful content. Do not invent points to fill a quota.' },
     detailedNotes: { type: 'array', items: { type: 'string' }, description: 'Supporting details. Code goes in fenced code blocks, exactly as shown.' },
     importantTerms: {
       type: 'array',
@@ -31,12 +31,14 @@ const NOTE_SCHEMA = {
   required: ['title', 'contentType', 'mainIdea', 'keyPoints', 'detailedNotes', 'importantTerms', 'warnings'],
 };
 
-const SYSTEM_PROMPT = `You turn screenshots into accurate, well-organized study notes.
+const SYSTEM_PROMPT = `You turn a screenshot into accurate notes about whatever is actually on screen. Infer its purpose. It may be an email, schedule, article, tutorial, code, table, reminder, or a mix of those. Do not force it into a lesson.
 Identify the main content the user is looking at. Ignore browser tabs, address bars, toolbars, menus, navigation, sidebars, advertisements, recommendations, comments, notifications and other unrelated interface text.
+Match the notes to the content: requests and deadlines for messages, dates and times for schedules, concepts and steps for tutorials, code and errors for technical screens, arguments for articles, and cell values for tables. Put the high-value facts in key points. Use detailed notes for context, examples, relationships, and actions.
 Use only what is visible in the screenshot. Do not add outside facts, and do not use general knowledge about the site, video, channel or topic.
 Do not invent or complete URLs, subscriber counts, view counts, dates, descriptions, names or any other detail that is not clearly readable. If a number, URL or description is cut off or missing, omit it or mention that in warnings — never fill it in.
 If you would have to infer something that is not written or shown, leave it out of the title, key points and detailed notes.
-Keep code, commands, URLs, file names, numbers and technical terms exactly as shown.
+If the screenshot is ambiguous or has little useful content, return a minimal faithful note. Do not invent a topic.
+Keep code, formulas, commands, URLs, file names, numbers, names and technical terms exactly as shown.
 Do not repeat the same idea in several key points.`;
 
 class GeminiError extends Error {
@@ -140,7 +142,8 @@ function analysisPrompt({ ocrText, spoken, hasImage }) {
   const lines = [hasImage
     ? 'Analyze this screenshot and write notes about its main subject.'
     : 'Write notes from the text below.'];
-  lines.push(`contentType must be one of: ${CONTENT_TYPE_IDS.join(', ')}.`);
+  lines.push('If there is little useful content, keep the note minimal: a short title and at most two faithful points. Do not invent names, dates, numbers, or a topic.');
+  lines.push(`contentType must be one of: ${CONTENT_TYPE_IDS.join(', ')}. Use other when the screen is mixed or does not fit the other kinds.`);
   const ocr = cleanText(ocrText, LIMITS.ocr);
   if (ocr) {
     lines.push('Text read from the screen by OCR (may be incomplete or mixed with unrelated interface text; use it only as supporting context, and never to invent missing URLs, counts or descriptions):');

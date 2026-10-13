@@ -9,7 +9,7 @@
 
 const { parseJsonObject, normalizePolish, fallbackPolish } = require('./logic');
 const {
-  isGrounded, pickTitle, dedupePoints, CONTENT_TYPES,
+  isGrounded, pickTitle, dedupePoints, CONTENT_TYPES, canFactCheckText, hasUnsupportedConcreteFacts,
 } = require('./notes-pipeline');
 
 const PREFERRED_MODELS = ['llama3.2', 'llama3.1', 'llama3', 'qwen2.5', 'mistral', 'gemma2', 'phi3'];
@@ -80,25 +80,27 @@ function createOllamaProvider({ baseUrl = 'http://127.0.0.1:11434', fetchImpl = 
 }
 
 const TYPE_GUIDANCE = {
-  education: 'This is a lesson or tutorial. Cover the topic, the key concepts, and important details.',
+  education: 'This is a lesson or tutorial. Cover the topic, the key concepts, and the steps that are actually shown.',
   video: 'This is a video page. Cover what the video is about and any concrete details shown.',
-  code: 'This is code or terminal output. Cover the purpose, the important code or concepts, and relevant commands. Keep code, commands, file names, errors and URLs exactly as written.',
+  code: 'This is code or terminal output. Cover the purpose and the important code, errors, or commands. Keep code, commands, file names, errors and URLs exactly as written.',
   docs: 'This is technical documentation. Cover the purpose, important APIs or concepts, and implementation details. Keep names, commands and URLs exactly as written.',
-  document: 'This is a document. Start with the main idea, then key points and supporting details.',
-  article: 'This is an article or web page. Start with the main idea, then key points and supporting details.',
-  general: 'Summarize the useful information on the screen.',
+  document: 'This is a document. Start with what it is asking or stating, then the concrete facts.',
+  article: 'This is an article or web page. Start with the main point, then the supporting facts that are written on screen.',
+  general: 'Summarize the useful information on the screen. Do not turn it into a lesson.',
+  other: 'This screen is mixed or does not fit one category. Extract the useful facts: requests, deadlines, dates, times, names, numbers, and any clear subject. Keep the note short if there is little content.',
 };
 
 function screenPrompt(cleanText, type) {
-  return `You turn text captured from a screen into concise study notes.
+  return `You turn text captured from a screen into accurate notes about what is actually shown.
 ${TYPE_GUIDANCE[type] || TYPE_GUIDANCE.general}
 Rules: use only facts that appear in the text. Do not add outside knowledge. Do not invent or complete URLs, counts, dates or descriptions that are not in the text. Do not repeat the same idea twice.
 Each point is one clear sentence. Ignore menus, buttons, ads and recommendations.
+If the text has little useful content, return a short title and at most 2 faithful points. Do not invent points to fill a quota.
 Screen text:
 """
 ${cleanText.slice(0, 4000)}
 """
-Return JSON only: {"title":"short title taken from the content","points":["key point", ...]} with 3 to 7 points.`;
+Return JSON only: {"title":"short title taken from the content","points":["key point", ...]} with at most 7 points.`;
 }
 
 function rulesResult(notes, reason, detail) {
@@ -146,8 +148,9 @@ async function summarizeText({ raw, ocr }, provider) {
   if (!st.available) return rules('unavailable', st.reason);
   let parsed;
   try {
-    parsed = await provider.generate(`You make concise study notes. Use only facts from the text below. Do not repeat the same idea twice.
-Keep code, commands and URLs exactly as written.
+    parsed = await provider.generate(`You make accurate notes from the text below. Use only facts that appear in it. Do not invent names, dates, numbers, URLs, or a topic. Do not repeat the same idea twice.
+Keep code, commands, dates, names and URLs exactly as written. If the user speech is unrelated to the screen text, ignore the speech.
+If there is little useful content, return at most 2 points.
 Screen text (already cleaned): ${screenText.slice(0, 2500)}
 What the user said: ${spoken}
 Return JSON only: {"title":"short title","points":["clear, concise point",...]}`);
@@ -163,6 +166,27 @@ Return JSON only: {"title":"short title","points":["clear, concise point",...]}`
 
 function typeLabel(type) {
   return CONTENT_TYPES[type] || CONTENT_TYPES.general;
+}
+
+// Drop Gemini lines that introduce numbers, names, emails, or URLs missing from the source.
+// When OCR is too thin and an image was sent, the image is the evidence, so the check is skipped.
+function filterFaithfulLines(text, source) {
+  if (!text) return '';
+  return String(text).split('\n').filter((line) => {
+    const body = line.replace(/^[-*•]\s+/, '').replace(/^#+\s+/, '').trim();
+    if (!body || body.length < 8) return true;
+    return !hasUnsupportedConcreteFacts(body, source);
+  }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function applyGeminiFaithfulness(result, source, hasImage) {
+  const check = canFactCheckText(source) || !hasImage;
+  if (!check) return result;
+  const points = (result.points || []).filter((p) => !hasUnsupportedConcreteFacts(p, source));
+  if (!points.length) return null;
+  let title = result.title || '';
+  if (title && hasUnsupportedConcreteFacts(title, source)) title = '';
+  return { ...result, title, points, details: filterFaithfulLines(result.details, source) };
 }
 
 // --- Provider choice ------------------------------------------------------------
@@ -193,13 +217,20 @@ async function summarizeCapture({ cleanText, notes, image }, ctx, { signal } = {
   if (blocked) return { ...rulesResult(notes, blocked.reason, blocked.detail), provider: 'Gemini' };
   try {
     const r = await ctx.gemini.analyze({ png: image, ocrText: cleanText }, { signal });
+    const faithful = applyGeminiFaithfulness(r, cleanText, !!(image && image.length));
+    if (!faithful) {
+      return {
+        ...rulesResult(notes, 'ungrounded', 'Gemini added names, dates, or numbers that are not in the screen text, so it was not used.'),
+        provider: 'Gemini',
+      };
+    }
     return {
       method: 'ai',
       provider: 'Gemini',
       model: r.model,
-      title: r.title || notes.title,
-      points: r.points,
-      details: r.details,
+      title: faithful.title || notes.title,
+      points: faithful.points,
+      details: faithful.details,
       contentType: r.contentType,
       reason: null,
       detail: '',
@@ -229,8 +260,10 @@ async function summarizeTextWith({ raw, ocr, image }, ctx) {
   if (blocked) return rules(blocked.reason, blocked.detail);
   try {
     const r = await ctx.gemini.analyze({ png: image, ocrText: screenText, spoken });
+    const faithful = applyGeminiFaithfulness(r, `${screenText}\n${spoken}`, !!(image && image.length));
+    if (!faithful) return rules('ungrounded', 'Gemini added names, dates, or numbers that are not in the source text, so it was not used.');
     return {
-      title: r.title, points: r.points, ai: true, method: 'ai', provider: 'Gemini', model: r.model, reason: null, detail: '',
+      title: faithful.title, points: faithful.points, ai: true, method: 'ai', provider: 'Gemini', model: r.model, reason: null, detail: '',
     };
   } catch (err) {
     return rules('failed', `Gemini: ${err.message}`);

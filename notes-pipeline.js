@@ -270,6 +270,7 @@ function classifyNoise(segments, W, H, chromeBottom) {
     else if (isMetadata(text)) reason = 'recommendations';
     else if (isControl(text)) reason = 'player-controls';
     else if (looksLikeUrl(text) && stats.total <= 2) reason = null;
+    else if (isStructuredFragment(text)) reason = null;
     else if (stats.real === 0 || stats.ratio < 0.5) reason = 'garbled';
     else if (stats.real === 1 && stats.total <= 2 && !(text.replace(/[^A-Za-z]/g, '').length >= 4 && seg.conf >= 75)) reason = 'fragment';
     out.push({ seg, reason });
@@ -373,7 +374,7 @@ function markHeadings(segs, textOnly) {
       s.heading = true;
     } else if (words <= 6 && /^[A-Z0-9 &'-]{4,}$/.test(s.text) && /[A-Z]{3}/.test(s.text)) {
       s.heading = true;
-    } else if (textOnly && words <= 8 && !endsSentence && /^[A-Z]/.test(s.text)) {
+    } else if (textOnly && words <= 8 && !endsSentence && /^[A-Z]/.test(s.text) && !/^(from|to|cc|bcc)\s*:/i.test(s.text)) {
       const next = segs[i + 1];
       s.heading = !!next && next.text.split(/\s+/).length > words;
     } else {
@@ -388,11 +389,15 @@ function buildParagraphs(segs, W) {
   for (const s of segs) {
     const kind = s.heading ? 'heading' : s.code ? 'code' : 'text';
     const startsList = kind === 'text' && isListStart(s.text);
+    const structured = kind === 'text' && isStructuredFragment(s.text);
+    const prevStructured = !!(cur && cur.kind === 'text' && isStructuredFragment(cur.lines[cur.lines.length - 1]));
     const newPara = !cur
       || kind === 'heading'
       || cur.kind === 'heading'
       || kind !== cur.kind
       || startsList
+      || structured
+      || prevStructured
       || (s.y0 - cur.last.y1) > Math.max(cur.last.h, s.h) * 1.6
       || Math.abs(s.x0 - cur.first.x0) > W * 0.08 && kind !== 'code';
     if (newPara) {
@@ -445,6 +450,29 @@ function parseDefinition(sentence) {
 
 const CUE_RE = /\b(important|key|note|remember|must|should|always|never|because|therefore|used to|allows?|enables?|consists? of|includes?|requires?|means|defined|called|known as|example|advantage|disadvantage|difference|result|causes?|first|finally)\b/i;
 
+const ACTION_RE = /\b(please|request(?:ed)?|deadline|due\b|asap|action required|rsvp|need you to|can you|could you|let me know|reply|submit|send)\b/i;
+const WHEN_RE = /(\b\d{1,2}:\d{2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b)/i;
+
+// Short lines that still carry a fact: a header, a time, an address, or a table row.
+function subjectValue(paras) {
+  for (const p of paras) {
+    const m = String(p.text || '').match(/^subject\s*:\s*(.+)$/i);
+    if (m && m[1].trim()) return m[1].trim();
+  }
+  return '';
+}
+
+function isStructuredFragment(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 160) return false;
+  const words = t.split(/\s+/).length;
+  if (/^(from|to|cc|bcc|subject|re|fwd)\s*:/i.test(t)) return true;
+  if (/@/.test(t) && words <= 8) return true;
+  if ((t.match(/\|/g) || []).length >= 2) return true;
+  if (words <= 10 && (/\b\d{1,2}:\d{2}\b/.test(t) || DATE_RE.test(t))) return true;
+  return false;
+}
+
 function scoreItem(item) {
   const words = item.text.split(/\s+/).length;
   let score = 1;
@@ -452,10 +480,13 @@ function scoreItem(item) {
   if (item.kind === 'step') score += 2.5;
   if (item.kind === 'example') score += 1;
   if (CUE_RE.test(item.text)) score += 1.5;
+  if (ACTION_RE.test(item.text)) score += 1.2;
+  if (WHEN_RE.test(item.text)) score += 0.8;
+  if (isStructuredFragment(item.text)) score += 2;
   if (/\d/.test(item.text)) score += 0.5;
   if (words >= 6 && words <= 35) score += 1;
   else if (words > 35) score += 0.5;
-  else if (words < 4) score -= 1.5;
+  else if (words < 4 && !isStructuredFragment(item.text)) score -= 1.5;
   score += ((item.conf || 80) - 70) / 40;
   return score;
 }
@@ -657,7 +688,7 @@ function buildNotes(paras) {
         kind = 'example';
       }
       if (bulletMatch) body = bulletMatch[1];
-      if (kind === 'sentence' && body.split(/\s+/).length < 3) continue;
+      if (kind === 'sentence' && body.split(/\s+/).length < 3 && !isStructuredFragment(body)) continue;
       items.push({ kind, text: body, def, conf: p.conf, order: order++ });
     }
   }
@@ -699,6 +730,7 @@ function buildNotes(paras) {
     || (b.h > a.h * 1.08 ? 1 : a.h > b.h * 1.08 ? -1 : a.order - b.order));
   const contexts = [...headings.map((h) => h.text), ...items.map((i) => i.text)];
   const title = pickTitle([
+    subjectValue(paras),
     ...bySize.map((h) => h.text),
     ...definitions.map((d) => d.term.charAt(0).toUpperCase() + d.term.slice(1)),
     ...keyPoints.map(clauseTitle),
@@ -817,7 +849,7 @@ function processText(text) {
       else seg.text = stripped;
       if (!reason && isMetadata(seg.text)) reason = 'recommendations';
       else if (!reason && isControl(seg.text)) reason = 'player-controls';
-      else if (!reason && !looksLikeUrl(seg.text) && realWordStats(seg.text).ratio < 0.5) reason = 'garbled';
+      else if (!reason && !isStructuredFragment(seg.text) && !looksLikeUrl(seg.text) && realWordStats(seg.text).ratio < 0.5) reason = 'garbled';
     }
     entries.push({ seg, reason });
   });
@@ -854,11 +886,38 @@ const CONTENT_TYPES = {
   document: 'document or PDF',
   article: 'article or web page',
   general: 'general screen',
+  other: 'other / mixed',
 };
 const EDU_CUE_RE = /\b(tutorial|lesson|lecture|course|chapter|module \d+|explained|how to|introduction to|beginners?|crash course|exam|syllabus|class \d+)\b/i;
 const VIDEO_CUE_RE = /(youtube|youtu\.be|vimeo|\bsubscribe\b|\b\d[\d.,]*\s?[KMB]? views\b|\b\d{1,2}:\d{2}\s*\/\s*\d{1,2}:\d{2}\b)/i;
 const ERROR_CUE_RE = /(\bPS [A-Z]:\\|Traceback \(most recent call last\)|npm ERR!|\b(Syntax|Type|Reference)Error\b|\bat \S+ \(\S+:\d+:\d+\)|exit code \d+)/;
 const DOCS_CUE_RE = /\b(documentation|docs|api reference|parameters?|arguments?|returns?|syntax|usage|installation|getting started|deprecated|methods?|properties)\b/gi;
+
+function countMatches(text, re) {
+  const flags = re.global ? re.flags : `${re.flags}g`;
+  return (String(text || '').match(new RegExp(re.source, flags)) || []).length;
+}
+
+// Generic signals only: letter fields, several dated events, or aligned rows.
+function looksLikeEmail(raw) {
+  const headers = countMatches(raw, /^(from|to|cc|bcc|subject|re|fwd)\s*:/gim);
+  if (headers >= 2) return true;
+  return headers >= 1 && /\b(please|deadline|due\b|asap|action required)\b/i.test(raw);
+}
+
+function looksLikeSchedule(raw) {
+  const stamps = countMatches(raw, /\b\d{1,2}:\d{2}\b/gi) + countMatches(raw, DATE_RE);
+  if (stamps < 2) return false;
+  return /\b(schedule|calendar|agenda|meeting|appointment|standup)\b/i.test(raw) || stamps >= 3;
+}
+
+function looksLikeTable(raw) {
+  const lines = String(raw || '').split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const piped = lines.filter((l) => (l.match(/\|/g) || []).length >= 2).length;
+  if (piped >= 2) return true;
+  const columns = lines.filter((l) => /\S(?:\s{2,}|\t)\S(?:\s{2,}|\t)\S/.test(l)).length;
+  return columns >= 3;
+}
 
 // `rawText` includes browser chrome and sidebars, which reveal the kind of page;
 // the notes themselves only come from the cleaned main content.
@@ -871,6 +930,7 @@ function detectContentType(rawText, notes) {
   if (/\.pdf\b|\bpage \d+ (of|\/) \d+\b|adobe acrobat/i.test(raw)) return 'document';
   const docsHits = (raw.match(DOCS_CUE_RE) || []).length;
   if (docsHits >= 3 || (docsHits >= 1 && notes.code.length)) return 'docs';
+  if (looksLikeEmail(raw) || looksLikeSchedule(raw) || looksLikeTable(raw)) return 'other';
   if (EDU_CUE_RE.test(raw) || notes.definitions.length >= 2 || notes.steps.length >= 3) return 'education';
   if (notes.keyPoints.length + notes.details.length >= 4) return 'article';
   return 'general';
@@ -880,7 +940,7 @@ function detectContentType(rawText, notes) {
 function shapeNotes(notes, rawText) {
   const type = detectContentType(rawText, notes);
   let keyPoints = notes.keyPoints.slice();
-  if (['article', 'document', 'general', 'video'].includes(type) && notes.mainIdea && keyPoints.includes(notes.mainIdea)) {
+  if (['article', 'document', 'general', 'video', 'other'].includes(type) && notes.mainIdea && keyPoints.includes(notes.mainIdea)) {
     keyPoints = [notes.mainIdea, ...keyPoints.filter((p) => p !== notes.mainIdea)];
   }
   if ((type === 'code' || type === 'docs') && keyPoints.length < 3) {
@@ -953,6 +1013,25 @@ function composeTypedDetails(notes, type) {
       section('Sections on screen', sections),
       section('Links', links),
     ];
+  } else if (type === 'other' || type === 'general') {
+    const bag = [...(notes.details || []), ...(notes.examples || [])];
+    const requests = [];
+    const whens = [];
+    const rest = [];
+    for (const line of bag) {
+      if (ACTION_RE.test(line)) requests.push(line);
+      else if (WHEN_RE.test(line) || isStructuredFragment(line)) whens.push(line);
+      else rest.push(line);
+    }
+    parts = [
+      section('Requests', list(requests)),
+      section('Dates and times', list(whens)),
+      section('Details', list(rest)),
+      section('Steps', steps),
+      section('Code', code),
+      section('Sections on screen', sections),
+      section('Links', links),
+    ];
   } else {
     parts = [
       section('Supporting details', details),
@@ -965,6 +1044,50 @@ function composeTypedDetails(notes, type) {
     ];
   }
   return parts.filter(Boolean).join('\n\n');
+}
+
+// Enough source text to check concrete claims. Sparse or image-only screens are not.
+function canFactCheckText(source) {
+  return contentTokens(source).length >= 8;
+}
+
+function digitGroups(text) {
+  return [...String(text || '').matchAll(/\d+(?:[.,]\d+)*/g)].map((m) => m[0].replace(/[.,]/g, ''));
+}
+
+// Concrete claims only: numbers, emails, URLs, multi-word names, and mid-sentence proper nouns.
+// Ordinary paraphrases that add no new fact are left alone.
+function hasUnsupportedConcreteFacts(text, source) {
+  const claim = String(text || '');
+  const src = String(source || '');
+  if (!claim.trim()) return false;
+  const digits = new Set(digitGroups(src));
+  if (digitGroups(claim).some((n) => !digits.has(n))) return true;
+  const srcLower = src.toLowerCase();
+  const emails = claim.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+  if (emails.some((e) => !srcLower.includes(e.toLowerCase()))) return true;
+  const urls = claim.match(/https?:\/\/[^\s)]+/gi) || [];
+  for (const u of urls) {
+    let host = '';
+    try { host = new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { host = ''; }
+    if (!host || !srcLower.includes(host)) return true;
+  }
+  const known = new Set(tokensOf(src));
+  const multi = /\b[A-Z][A-Za-z'’.-]{1,}(?:\s+[A-Z][A-Za-z'’.-]{1,})+\b/g;
+  let m;
+  while ((m = multi.exec(claim))) {
+    const words = tokensOf(m[0]).filter((w) => w.length > 2 && !STOPWORDS.has(w));
+    if (words.length >= 2 && words.some((w) => !known.has(w))) return true;
+  }
+  for (const sentence of claim.split(/\n|(?<=[.!?])\s+/)) {
+    const words = sentence.match(/\b[A-Za-z][A-Za-z'’.-]*\b/g) || [];
+    for (const w of words.slice(1)) {
+      const acronym = /^[A-Z]{3,6}$/.test(w);
+      const name = /^[A-Z][a-z]{2,}$/.test(w);
+      if ((acronym || name) && !known.has(w.toLowerCase())) return true;
+    }
+  }
+  return false;
 }
 
 // Rejects AI output that is not supported by the source text.
@@ -985,6 +1108,8 @@ module.exports = {
   dedupePoints,
   CONTENT_TYPES,
   isGrounded,
+  canFactCheckText,
+  hasUnsupportedConcreteFacts,
   pickTitle,
   clauseTitle,
   fallbackTitle,

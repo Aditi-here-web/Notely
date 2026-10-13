@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   processText, processOcr, pickTitle, dedupePoints, composeDetails, detectContentType,
+  hasUnsupportedConcreteFacts, canFactCheckText,
 } = require('../notes-pipeline');
 const { createOllamaProvider, summarizeScreen, summarizeText, screenPrompt } = require('../summarizer');
 const { layout } = require('./layout-fixture');
@@ -89,6 +90,80 @@ test('detectContentType falls back to general for sparse screens', () => {
   assert.equal(detectContentType('', {
     code: [], commands: [], keyPoints: ['One point here'], details: [], steps: [], definitions: [],
   }), 'general');
+});
+
+test('email, schedule, and table-like screens are other/mixed, not lessons', () => {
+  const email = processText([
+    'From: Alex Rivera <alex@example.com>',
+    'To: Jordan Lee',
+    'Subject: Budget draft due Friday',
+    'Please send the revised figures by Friday 16 Oct.',
+    'The board meets at 10:00 AM in room 4.',
+  ].join('\n'));
+  assert.equal(email.notes.type, 'other');
+  assert.equal(email.notes.title, 'Budget draft due Friday');
+  assert.notEqual(email.notes.type, 'education');
+  const emailNote = [...email.notes.keyPoints, composeDetails(email.notes, email.notes.type), email.cleanText].join('\n');
+  assert.match(emailNote, /revised figures|Budget draft|10:00/);
+  assert.ok(!/Key concepts/.test(composeDetails(email.notes, 'other')));
+
+  const schedule = processText([
+    'Weekly schedule',
+    'Monday 9:00 AM Standup with the platform team',
+    'Tuesday 2:30 PM Design review in room 4',
+    'Wednesday 11:00 AM Planning session',
+  ].join('\n'));
+  assert.equal(schedule.notes.type, 'other');
+  assert.deepEqual(schedule.notes.keyPoints, [
+    'Monday 9:00 AM Standup with the platform team',
+    'Tuesday 2:30 PM Design review in room 4',
+    'Wednesday 11:00 AM Planning session',
+  ]);
+
+  const table = processText([
+    'Roster',
+    'Name | Role | Hours',
+    'Ada Lovelace | Engineering | 40',
+    'Lin Park | Design | 32',
+    'Grace Hopper | Research | 36',
+  ].join('\n'));
+  assert.equal(table.notes.type, 'other');
+  const tableLines = [...table.notes.keyPoints, ...table.notes.details];
+  for (const row of [
+    'Ada Lovelace | Engineering | 40',
+    'Lin Park | Design | 32',
+    'Grace Hopper | Research | 36',
+  ]) {
+    assert.ok(tableLines.includes(row), row);
+  }
+  assert.ok(!tableLines.some((line) => line.includes('Ada Lovelace') && line.includes('Lin Park')));
+});
+
+test('a date-only calendar is other/mixed', () => {
+  const r = processText([
+    '10/14/2026 Design review',
+    '10/15/2026 Planning',
+    '10/16/2026 Launch',
+  ].join('\n'));
+  assert.equal(r.notes.type, 'other');
+});
+
+test('a short time line is kept, and a random screen stays minimal', () => {
+  const timed = processText('Monday standup\n9:00 AM\nBring the rollout checklist for the release.');
+  assert.match([...timed.notes.keyPoints, ...timed.notes.details, timed.cleanText].join('\n'), /9:00 AM/);
+  const random = processText('OK\nSettings\nSubscribe\nx');
+  assert.equal(random.notes.lowContent, true);
+  assert.ok(random.notes.keyPoints.length <= 2);
+  assert.notEqual(random.notes.type, 'education');
+});
+
+test('concrete-fact check allows paraphrases and flags invented names and numbers', () => {
+  const src = 'Plants convert light energy into chemical energy. Chlorophyll absorbs red and blue light.';
+  assert.equal(canFactCheckText(src), true);
+  assert.equal(hasUnsupportedConcreteFacts('Plants turn light into stored chemical energy.', src), false);
+  assert.equal(hasUnsupportedConcreteFacts('Priya Sharma confirmed this on 4 April 1999.', src), true);
+  assert.equal(hasUnsupportedConcreteFacts('Oxygen output rose by 12 percent.', src), true);
+  assert.equal(canFactCheckText('OK'), false);
 });
 
 // --- Summarizer: honest fallback, grounding, failures -------------------------------
@@ -178,6 +253,10 @@ test('the local AI prompt forbids invented URLs, counts and descriptions', () =>
   const prompt = screenPrompt('Python Lists\nA list is an ordered collection.', 'education');
   assert.match(prompt, /use only facts that appear in the text/i);
   assert.match(prompt, /Do not invent or complete URLs, counts, dates or descriptions/);
+  assert.doesNotMatch(prompt, /study notes/i);
+  assert.match(prompt, /at most 2 faithful points/i);
+  const mixed = screenPrompt('From: Alex\nSubject: Budget', 'other');
+  assert.match(mixed, /requests, deadlines, dates/i);
 });
 
 test('low-content screens are not sent to the AI', async () => {

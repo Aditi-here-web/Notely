@@ -66,6 +66,9 @@ test('the screenshot is sent as inline PNG image input, with OCR text as context
   assert.match(parts[1].text, /supporting context[\s\S]*Your Heart Belongs to Another Era/);
   assert.match(call.body.systemInstruction.parts[0].text, /Ignore browser tabs.*advertisements, recommendations/s);
   assert.match(call.body.systemInstruction.parts[0].text, /Do not invent or complete URLs, subscriber counts, view counts/);
+  assert.doesNotMatch(call.body.systemInstruction.parts[0].text, /study notes/i);
+  assert.match(call.body.systemInstruction.parts[0].text, /minimal faithful note/);
+  assert.match(parts[1].text, /at most two faithful points/);
   assert.match(parts[1].text, /never to invent missing URLs, counts or descriptions/);
   // generateContent's TextResponseFormat.mimeType is an enum; the API rejects "application/json" with 400.
   assert.deepEqual(call.body.generationConfig.responseFormat.text, { mimeType: 'APPLICATION_JSON', schema: NOTE_SCHEMA });
@@ -195,15 +198,50 @@ function ctxWith(fetchImpl, over = {}) {
   };
 }
 
+const FAITHFUL = {
+  title: 'Photosynthesis',
+  contentType: 'education',
+  mainIdea: 'Plants convert light energy into chemical energy.',
+  keyPoints: [
+    'Plants turn light into stored chemical energy.',
+    'Chlorophyll absorbs red and blue light.',
+    'Priya Sharma recorded a 12 percent rise on 4 April 1999.',
+  ],
+  detailedNotes: ['Oxygen is released as a by-product.', 'Uploaded 3 weeks ago.'],
+  importantTerms: [],
+  warnings: [],
+};
+
 test('Gemini analysis is used and labelled as AI only after consent', async () => {
-  const fetchImpl = mockFetch(() => reply(200, geminiBody(GOOD)));
+  const fetchImpl = mockFetch(() => reply(200, geminiBody(FAITHFUL)));
   const r = await summarizeCapture({ cleanText: SCREEN, notes: notes(), image: PNG }, ctxWith(fetchImpl));
   assert.equal(r.method, 'ai');
   assert.equal(r.provider, 'Gemini');
   assert.equal(r.model, DEFAULT_GEMINI_MODEL);
-  assert.equal(r.title, 'Your Heart Belongs to Another Era');
-  assert.match(r.details, /^Main idea\n/);
+  assert.equal(r.title, 'Photosynthesis');
+  assert.deepEqual(r.points, [
+    'Plants turn light into stored chemical energy.',
+    'Chlorophyll absorbs red and blue light.',
+  ]);
+  assert.match(r.details, /Oxygen is released as a by-product/);
+  assert.ok(!/Priya Sharma|3 weeks/.test(r.details));
   assert.equal(fetchImpl.calls.length, 1);
+});
+
+test('Gemini points that invent names or numbers fall back to the rules notes', async () => {
+  const invented = {
+    ...FAITHFUL,
+    title: 'Priya Sharma update',
+    keyPoints: ['Priya Sharma set a deadline of 4 April 1999.'],
+    detailedNotes: [],
+    mainIdea: '',
+  };
+  const fetchImpl = mockFetch(() => reply(200, geminiBody(invented)));
+  const n = notes();
+  const r = await summarizeCapture({ cleanText: SCREEN, notes: n, image: PNG }, ctxWith(fetchImpl));
+  assert.equal(r.method, 'rules');
+  assert.equal(r.reason, 'ungrounded');
+  assert.deepEqual(r.points, n.keyPoints);
 });
 
 test('without consent or a key nothing is uploaded and rules are used', async () => {
