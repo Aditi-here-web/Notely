@@ -5,7 +5,7 @@ const {
 } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { tessCreateWorkerOptions, pngFromDataUrl } = require('./logic');
+const { tessCreateWorkerOptions, pngFromDataUrl, realWhisperCacheDir } = require('./logic');
 const storage = require('./storage');
 const {
   safeFileName, renderExportHtml, renderExportMarkdown, renderExportText, pngBuffer,
@@ -235,9 +235,11 @@ function whisperOnnxPath(cacheDir) {
 
 function resolveCacheDir() {
   const userDir = path.join(app.getPath('userData'), 'models');
+  const userCache = realWhisperCacheDir(userDir);
+  if (userCache) return userCache;
   const bundled = path.join(__dirname, 'node_modules', '@huggingface', 'transformers', '.cache');
-  if (fs.existsSync(whisperOnnxPath(userDir))) return userDir;
-  if (fs.existsSync(whisperOnnxPath(bundled))) return bundled;
+  const bundledCache = realWhisperCacheDir(bundled);
+  if (bundledCache) return bundledCache;
   fs.mkdirSync(userDir, { recursive: true });
   return userDir;
 }

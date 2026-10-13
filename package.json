@@ -6,14 +6,53 @@
     "start": "electron .",
     "test": "node --test test/logic.test.js test/pipeline.test.js test/storage.test.js test/export.test.js test/notes-ai.test.js test/capture-flow.test.js test/gemini.test.js test/workflow.test.js",
     "test:ocr": "node test/ocr-pipeline-smoke.js",
-    "test:e2e": "node test/ui-e2e.js"
+    "test:e2e": "node test/ui-e2e.js",
+    "dist:dir": "electron-builder --win dir"
+  },
+  "build": {
+    "appId": "com.notely.app",
+    "asar": {
+      "smartUnpack": false
+    },
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/bin/napi-v3/win32/x64/**",
+      "node_modules/@img/sharp-win32-x64/lib/**",
+      "node_modules/@huggingface/transformers/.cache/**"
+    ],
+    "files": [
+      "!test/**",
+      "!**/.env",
+      "!**/.env.*",
+      "!**/*.pem",
+      "!**/*.key",
+      "!**/*.p12",
+      "!**/*.pfx",
+      "!**/credentials*.json",
+      "!**/secrets*.json",
+      "!**/gemini-key.bin",
+      "!**/Local State",
+      "!settings.json",
+      "!cfg.json",
+      "!imported.json",
+      "!notes/**",
+      "!models/**",
+      "!screenshots/**",
+      "!screenshot*.png"
+    ],
+    "win": {
+      "target": "dir",
+      "signAndEditExecutable": false
+    }
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
-    "electron": "^31.7.7",
     "tesseract.js": "^5.1.0"
   },
   "allowScripts": {
     "electron@31.7.7": true
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^26.15.3"
   }
 }

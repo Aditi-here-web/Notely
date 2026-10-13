@@ -127,6 +127,25 @@ function tessWorkerPath(tesseractRoot) {
   return nested;
 }
 
+// ONNX Runtime opens model files with the OS, not Node's fs, so a path inside
+// app.asar is not a readable model. Prefer the unpacked file when it exists.
+function realWhisperCacheDir(cacheDir) {
+  if (!cacheDir) return null;
+  const onnx = path.join(cacheDir, 'Xenova', 'whisper-tiny.en', 'onnx', 'encoder_model.onnx');
+  const asarSep = `${path.sep}app.asar${path.sep}`;
+  const unpackedSep = `${path.sep}app.asar.unpacked${path.sep}`;
+  let candidate = onnx;
+  if (onnx.includes(asarSep) && !onnx.includes(unpackedSep)) {
+    candidate = onnx.replace(asarSep, unpackedSep);
+  } else if (!fs.existsSync(onnx)) {
+    return null;
+  } else {
+    return cacheDir;
+  }
+  if (!fs.existsSync(candidate)) return null;
+  return path.dirname(path.dirname(path.dirname(path.dirname(candidate))));
+}
+
 function tessCreateWorkerOptions({ appRoot, tesseractRoot, resourcesPath }) {
   const workerPath = tessWorkerPath(tesseractRoot);
   const cachePath = tessLangDir(appRoot, resourcesPath);
@@ -161,4 +180,5 @@ module.exports = {
   tessLangDir,
   tessWorkerPath,
   tessCreateWorkerOptions,
+  realWhisperCacheDir,
 };

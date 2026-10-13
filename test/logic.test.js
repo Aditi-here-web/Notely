@@ -131,6 +131,33 @@ test('tessCreateWorkerOptions uses cachePath instead of a filesystem langPath', 
   assert.ok(fs.existsSync(path.join(opts.cachePath, 'eng.traineddata')));
 });
 
+test('realWhisperCacheDir returns a real cache and skips an asar path', () => {
+  const os = require('node:os');
+  const { realWhisperCacheDir } = require('../logic');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'notely-cache-'));
+  const rel = path.join('Xenova', 'whisper-tiny.en', 'onnx', 'encoder_model.onnx');
+  try {
+    const plain = path.join(root, 'plain');
+    fs.mkdirSync(path.dirname(path.join(plain, rel)), { recursive: true });
+    fs.writeFileSync(path.join(plain, rel), 'x');
+    assert.equal(realWhisperCacheDir(plain), plain);
+    assert.equal(realWhisperCacheDir(path.join(root, 'missing')), null);
+
+    const unpacked = path.join(root, 'resources', 'app.asar.unpacked', 'models');
+    fs.mkdirSync(path.dirname(path.join(unpacked, rel)), { recursive: true });
+    fs.writeFileSync(path.join(unpacked, rel), 'x');
+    const packed = path.join(root, 'resources', 'app.asar', 'models');
+    assert.equal(realWhisperCacheDir(packed), unpacked);
+
+    const onlyAsar = path.join(root, 'resources', 'app.asar', 'only');
+    fs.mkdirSync(path.dirname(path.join(onlyAsar, rel)), { recursive: true });
+    fs.writeFileSync(path.join(onlyAsar, rel), 'x');
+    assert.equal(realWhisperCacheDir(onlyAsar), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('tessCreateWorkerOptions rejects a missing language pack', () => {
   const tessRoot = path.dirname(require.resolve('tesseract.js/package.json'));
   assert.throws(
