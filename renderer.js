@@ -123,7 +123,11 @@ function getPoints() {
 }
 
 function setPoints(points) {
-  $('points').value = (points || []).join('\n');
+  $('points').value = (points || []).map((p) => {
+    const line = String(p || '').trim();
+    if (!line) return '';
+    return /^[-•*]\s+/.test(line) ? line : `• ${line}`;
+  }).filter(Boolean).join('\n');
   state.pointsEdited = false;
 }
 

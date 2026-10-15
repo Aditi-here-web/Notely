@@ -271,6 +271,7 @@ function classifyNoise(segments, W, H, chromeBottom) {
     else if (isControl(text)) reason = 'player-controls';
     else if (looksLikeUrl(text) && stats.total <= 2) reason = null;
     else if (isStructuredFragment(text)) reason = null;
+    else if (isObviousNoise(text)) reason = 'garbled';
     else if (stats.real === 0 || stats.ratio < 0.5) reason = 'garbled';
     else if (stats.real === 1 && stats.total <= 2 && !(text.replace(/[^A-Za-z]/g, '').length >= 4 && seg.conf >= 75)) reason = 'fragment';
     out.push({ seg, reason });
@@ -460,6 +461,30 @@ function subjectValue(paras) {
     if (m && m[1].trim()) return m[1].trim();
   }
   return '';
+}
+
+function isObviousNoise(text) {
+  const t = normalizeSpaces(text);
+  if (!t) return true;
+  if (isStructuredFragment(t) || isCodeLike(t) || looksLikeUrl(t)) return false;
+  if (/([A-Za-z])\1{3,}/.test(t)) return true;
+  const letters = (t.match(/[A-Za-z]/g) || []).length;
+  const symbols = (t.match(/[^A-Za-z0-9\s]/g) || []).length;
+  if (letters > 0 && letters < 8 && symbols > letters) return true;
+  const stats = realWordStats(t);
+  return stats.total >= 2 && stats.real === 0;
+}
+
+function overlapsPoint(text, points) {
+  const toks = contentTokens(text);
+  if (toks.length < 2) return false;
+  return points.some((p) => {
+    const other = contentTokens(p);
+    if (other.length < 2) return false;
+    const c = containment(toks, other);
+    const min = Math.min(c.aSize, c.bSize);
+    return min >= 2 && c.inter / min >= 0.85;
+  });
 }
 
 function isStructuredFragment(text) {
@@ -689,6 +714,7 @@ function buildNotes(paras) {
       }
       if (bulletMatch) body = bulletMatch[1];
       if (kind === 'sentence' && body.split(/\s+/).length < 3 && !isStructuredFragment(body)) continue;
+      if (kind === 'sentence' && isObviousNoise(body)) continue;
       items.push({ kind, text: body, def, conf: p.conf, order: order++ });
     }
   }
@@ -703,7 +729,8 @@ function buildNotes(paras) {
   const top = chosen[0];
   chosen.sort((a, b) => a.order - b.order);
 
-  const keyPoints = dedupePoints(chosen.map((i) => truncateWords(i.text, 320)));
+  const keyPointTexts = dedupePoints(chosen.map((i) => truncateWords(i.text, 320)));
+  const keyPoints = keyPointTexts;
   const commands = [];
   for (const block of code) {
     for (const line of block.split('\n')) {
@@ -711,11 +738,12 @@ function buildNotes(paras) {
       if (COMMAND_RE.test(cmd) && !commands.includes(cmd)) commands.push(cmd);
     }
   }
-  const details = pool
+  const details = dedupePoints(pool
     .filter((i) => !chosenSet.has(i.order))
     .sort((a, b) => a.order - b.order)
     .slice(0, 15)
-    .map((i) => truncateWords(i.text, 400));
+    .map((i) => truncateWords(i.text, 400)))
+    .filter((d) => !isObviousNoise(d) && !overlapsPoint(d, keyPointTexts));
   const definitions = items.filter((i) => i.kind === 'definition').map((i) => ({
     term: i.def.term,
     meaning: truncateWords(i.def.meaning, 300),
@@ -742,7 +770,7 @@ function buildNotes(paras) {
 
   return {
     title,
-    headings: headings.map((h) => h.text).filter((h) => !title || !coveredByTitle(h, title)),
+    headings: headings.map((h) => h.text).filter((h) => (!title || !coveredByTitle(h, title)) && !isObviousNoise(h)),
     keyPoints: keyPoints.filter((p) => !title || !coveredByTitle(p, title)),
     mainIdea: top ? truncateWords(top.text, 320) : '',
     definitions,
@@ -849,6 +877,7 @@ function processText(text) {
       else seg.text = stripped;
       if (!reason && isMetadata(seg.text)) reason = 'recommendations';
       else if (!reason && isControl(seg.text)) reason = 'player-controls';
+      else if (!reason && isObviousNoise(seg.text)) reason = 'garbled';
       else if (!reason && !isStructuredFragment(seg.text) && !looksLikeUrl(seg.text) && realWordStats(seg.text).ratio < 0.5) reason = 'garbled';
     }
     entries.push({ seg, reason });
@@ -1055,6 +1084,14 @@ function digitGroups(text) {
   return [...String(text || '').matchAll(/\d+(?:[.,]\d+)*/g)].map((m) => m[0].replace(/[.,]/g, ''));
 }
 
+// A plural or singular of a word already on screen is the same word, not a new name.
+function sourceHasWord(known, word) {
+  if (known.has(word)) return true;
+  if (word.length > 3 && word.endsWith('s') && known.has(word.slice(0, -1))) return true;
+  if (word.length > 2 && known.has(`${word}s`)) return true;
+  return false;
+}
+
 // Concrete claims only: numbers, emails, URLs, multi-word names, and mid-sentence proper nouns.
 // Ordinary paraphrases that add no new fact are left alone.
 function hasUnsupportedConcreteFacts(text, source) {
@@ -1077,14 +1114,15 @@ function hasUnsupportedConcreteFacts(text, source) {
   let m;
   while ((m = multi.exec(claim))) {
     const words = tokensOf(m[0]).filter((w) => w.length > 2 && !STOPWORDS.has(w));
-    if (words.length >= 2 && words.some((w) => !known.has(w))) return true;
+    if (words.length >= 2 && words.some((w) => !sourceHasWord(known, w))) return true;
   }
   for (const sentence of claim.split(/\n|(?<=[.!?])\s+/)) {
     const words = sentence.match(/\b[A-Za-z][A-Za-z'’.-]*\b/g) || [];
     for (const w of words.slice(1)) {
+      if (STOPWORDS.has(w.toLowerCase())) continue;
       const acronym = /^[A-Z]{3,6}$/.test(w);
       const name = /^[A-Z][a-z]{2,}$/.test(w);
-      if ((acronym || name) && !known.has(w.toLowerCase())) return true;
+      if ((acronym || name) && !sourceHasWord(known, w.toLowerCase())) return true;
     }
   }
   return false;
